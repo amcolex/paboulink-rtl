@@ -1,0 +1,22 @@
+[project]
+name = "paboulink-rtl"
+version = "0.1.0"
+description = "OFDM RTL exploration with cocotb + Verilator"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cocotb ~= 1.8",
+    "cocotb-test ~= 0.2",
+    "pytest ~= 8.0",
+    "numpy ~= 2.1",
+    "matplotlib ~= 3.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest-xdist ~= 3.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

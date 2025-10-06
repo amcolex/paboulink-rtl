@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Simulator outputs
+sim_build/
+results.xml
+*.vcd
+
+# Generated analysis plots
+tests/plots/
