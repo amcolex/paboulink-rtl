@@ -13,6 +13,3 @@ wheels/
 sim_build/
 results.xml
 *.vcd
-
-# Generated analysis plots
-tests/plots/
