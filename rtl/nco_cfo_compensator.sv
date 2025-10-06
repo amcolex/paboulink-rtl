@@ -1,4 +1,6 @@
 // Dual-channel NCO-based CFO compensator with AXI4-Stream I/Q pairs and AXI4-Lite control.
+// The datapath time-multiplexes two DSP multipliers across both channels, leveraging the
+// 8x fabric clock to reduce multiplier usage while meeting 30.72 Msps throughput.
 module nco_cfo_compensator #(
     parameter int WIDTH = 12,
     parameter int NUM_CHANNELS = 2,
@@ -45,7 +47,9 @@ module nco_cfo_compensator #(
     localparam int LUT_SIZE = 1 << LUT_ADDR_WIDTH;
 
     // NCO look-up tables for sine and cosine (signed 1.15 format when LUT_DATA_WIDTH=16).
+    (* rom_style = "distributed", ram_style = "distributed" *)
     logic signed [LUT_DATA_WIDTH-1:0] cos_lut [0:LUT_SIZE-1];
+    (* rom_style = "distributed", ram_style = "distributed" *)
     logic signed [LUT_DATA_WIDTH-1:0] sin_lut [0:LUT_SIZE-1];
 
     initial begin
@@ -67,11 +71,72 @@ module nco_cfo_compensator #(
         end
     end
 
+    function automatic logic signed [WIDTH+LUT_DATA_WIDTH:0] extend_product (
+        input logic signed [WIDTH+LUT_DATA_WIDTH-1:0] value
+    );
+        extend_product = {{1{value[WIDTH+LUT_DATA_WIDTH-1]}}, value};
+    endfunction
+
     logic [ACC_WIDTH-1:0] phase_inc;
     logic [ACC_WIDTH-1:0] phase_acc;
+    logic [ACC_WIDTH-1:0] phase_acc_next;
     wire  [LUT_ADDR_WIDTH-1:0] phase_index = phase_acc[ACC_WIDTH-1 -: LUT_ADDR_WIDTH];
 
-    // Helper for saturation after fixed-point shift
+    logic signed [LUT_DATA_WIDTH-1:0] cos_val_latched;
+    logic signed [LUT_DATA_WIDTH-1:0] sin_val_latched;
+    logic                             tlast_latched;
+
+    logic signed [WIDTH-1:0] sample_i [NUM_CHANNELS];
+    logic signed [WIDTH-1:0] sample_q [NUM_CHANNELS];
+    logic signed [WIDTH-1:0] result_i [NUM_CHANNELS];
+    logic signed [WIDTH-1:0] result_q [NUM_CHANNELS];
+
+    logic [AXIS_DATA_WIDTH-1:0] packed_comb;
+
+    typedef enum logic [1:0] {
+        STATE_IDLE,
+        STATE_COMPUTE,
+        STATE_PACK,
+        STATE_OUTPUT
+    } state_t;
+
+    typedef enum logic [1:0] {
+        STEP_PRIME  = 2'd0,
+        STEP_REAL   = 2'd1,
+        STEP_IMAG   = 2'd2
+    } step_t;
+
+    localparam int CHANNEL_COUNTER_WIDTH = (NUM_CHANNELS <= 1) ? 1 : $clog2(NUM_CHANNELS);
+    localparam logic [CHANNEL_COUNTER_WIDTH-1:0] LAST_CHANNEL = CHANNEL_COUNTER_WIDTH'(NUM_CHANNELS-1);
+
+    state_t state;
+    step_t  compute_step;
+    logic [CHANNEL_COUNTER_WIDTH-1:0] channel_idx;
+
+    logic signed [WIDTH-1:0]           mult_op_a;
+    logic signed [LUT_DATA_WIDTH-1:0]  mult_op_b;
+    logic signed [WIDTH-1:0]           mult_op_c;
+    logic signed [LUT_DATA_WIDTH-1:0]  mult_op_d;
+    (* use_dsp = "yes" *) logic signed [WIDTH+LUT_DATA_WIDTH-1:0] mult_res_a;
+    (* use_dsp = "yes" *) logic signed [WIDTH+LUT_DATA_WIDTH-1:0] mult_res_b;
+
+    (* use_dsp = "no" *) logic signed [WIDTH+LUT_DATA_WIDTH:0] real_temp;
+    (* use_dsp = "no" *) logic signed [WIDTH+LUT_DATA_WIDTH:0] imag_temp;
+
+    always_comb begin
+        packed_comb = '0;
+        for (int ch = 0; ch < NUM_CHANNELS; ch++) begin
+            int base = ch * 2 * WIDTH;
+            packed_comb[base +: WIDTH]          = result_i[ch];
+            packed_comb[base + WIDTH +: WIDTH] = result_q[ch];
+        end
+    end
+
+    // Multipliers mapped to two DSP blocks (combinational to ease time-multiplexing).
+    assign mult_res_a = $signed(mult_op_a) * $signed(mult_op_b);
+    assign mult_res_b = $signed(mult_op_c) * $signed(mult_op_d);
+
+    // Helper for saturation after fixed-point shift.
     function automatic logic signed [WIDTH-1:0] sat_shift (
         input logic signed [WIDTH+LUT_DATA_WIDTH:0] value
     );
@@ -80,25 +145,23 @@ module nco_cfo_compensator #(
         logic signed [WIDTH-1:0] min_base;
         logic signed [WIDTH+LUT_DATA_WIDTH:0] max_val;
         logic signed [WIDTH+LUT_DATA_WIDTH:0] min_val;
-        logic signed [WIDTH+LUT_DATA_WIDTH:0] clipped;
         begin
             shifted = value >>> FRACTION_BITS;
             max_base = (1 << (WIDTH - 1)) - 1;
             min_base = -(1 << (WIDTH - 1));
             max_val = {{(LUT_DATA_WIDTH+1){max_base[WIDTH-1]}}, max_base};
             min_val = {{(LUT_DATA_WIDTH+1){min_base[WIDTH-1]}}, min_base};
-            clipped = shifted;
             if (shifted > max_val) begin
-                clipped = max_val;
+                shifted = max_val;
             end else if (shifted < min_val) begin
-                clipped = min_val;
+                shifted = min_val;
             end
-            sat_shift = clipped[WIDTH-1:0];
+            sat_shift = shifted[WIDTH-1:0];
         end
     endfunction
 
-    // AXI4-Stream flow control
-    assign s_axis_tready = m_axis_tready || !m_axis_tvalid;
+    // AXI4-Stream ready/valid management.
+    assign s_axis_tready = (state == STATE_IDLE);
 
     // AXI4-Lite write channel
     always_ff @(posedge clk or negedge rst_n) begin
@@ -159,52 +222,107 @@ module nco_cfo_compensator #(
 
     assign s_axi_rresp = 2'b00;
 
-    // Stream processing
+    // Stream datapath with time-multiplexed multipliers.
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            state        <= STATE_IDLE;
+            compute_step <= STEP_PRIME;
+            channel_idx  <= '0;
+            phase_acc    <= '0;
+            phase_acc_next <= '0;
             m_axis_tvalid <= 1'b0;
             m_axis_tlast  <= 1'b0;
             m_axis_tdata  <= '0;
-            phase_acc     <= '0;
+            cos_val_latched <= '0;
+            sin_val_latched <= '0;
+            real_temp <= '0;
+            mult_op_a <= '0;
+            mult_op_b <= '0;
+            mult_op_c <= '0;
+            mult_op_d <= '0;
+            tlast_latched <= 1'b0;
+            for (int ch = 0; ch < NUM_CHANNELS; ch++) begin
+                sample_i[ch] <= '0;
+                sample_q[ch] <= '0;
+                result_i[ch] <= '0;
+                result_q[ch] <= '0;
+            end
         end else begin
-            if (s_axis_tvalid && s_axis_tready) begin
-                logic signed [LUT_DATA_WIDTH-1:0] cos_val;
-                logic signed [LUT_DATA_WIDTH-1:0] sin_val;
-                cos_val = cos_lut[phase_index];
-                sin_val = sin_lut[phase_index];
-
-                for (int ch = 0; ch < NUM_CHANNELS; ch++) begin
-                    int base = ch * 2 * WIDTH;
-                    logic signed [WIDTH-1:0] in_i;
-                    logic signed [WIDTH-1:0] in_q;
-                    logic signed [WIDTH+LUT_DATA_WIDTH-1:0] prod_i_cos;
-                    logic signed [WIDTH+LUT_DATA_WIDTH-1:0] prod_q_sin;
-                    logic signed [WIDTH+LUT_DATA_WIDTH-1:0] prod_q_cos;
-                    logic signed [WIDTH+LUT_DATA_WIDTH-1:0] prod_i_sin;
-                    logic signed [WIDTH+LUT_DATA_WIDTH:0] real_accum;
-                    logic signed [WIDTH+LUT_DATA_WIDTH:0] imag_accum;
-
-                    in_i = s_axis_tdata[base +: WIDTH];
-                    in_q = s_axis_tdata[base + WIDTH +: WIDTH];
-
-                    prod_i_cos = $signed(in_i) * $signed(cos_val);
-                    prod_q_sin = $signed(in_q) * $signed(sin_val);
-                    real_accum = $signed(prod_i_cos) + $signed(prod_q_sin);
-
-                    prod_q_cos = $signed(in_q) * $signed(cos_val);
-                    prod_i_sin = $signed(in_i) * $signed(sin_val);
-                    imag_accum = $signed(prod_q_cos) - $signed(prod_i_sin);
-
-                    m_axis_tdata[base +: WIDTH] <= sat_shift(real_accum);
-                    m_axis_tdata[base + WIDTH +: WIDTH] <= sat_shift(imag_accum);
+            case (state)
+                STATE_IDLE: begin
+                    if (s_axis_tvalid && s_axis_tready) begin
+                        for (int ch = 0; ch < NUM_CHANNELS; ch++) begin
+                            int base = ch * 2 * WIDTH;
+                            sample_i[ch] <= s_axis_tdata[base +: WIDTH];
+                            sample_q[ch] <= s_axis_tdata[base + WIDTH +: WIDTH];
+                        end
+                        cos_val_latched <= cos_lut[phase_index];
+                        sin_val_latched <= sin_lut[phase_index];
+                        tlast_latched   <= s_axis_tlast;
+                        phase_acc_next  <= phase_acc + phase_inc;
+                        channel_idx     <= '0;
+                        compute_step    <= STEP_PRIME;
+                        state           <= STATE_COMPUTE;
+                    end
                 end
 
-                m_axis_tvalid <= 1'b1;
-                m_axis_tlast  <= s_axis_tlast;
-                phase_acc     <= phase_acc + phase_inc;
-            end else if (m_axis_tvalid && m_axis_tready) begin
-                m_axis_tvalid <= 1'b0;
-            end
+                STATE_COMPUTE: begin
+                    case (compute_step)
+                        STEP_PRIME: begin
+                            mult_op_a <= sample_i[channel_idx];
+                            mult_op_b <= cos_val_latched;
+                            mult_op_c <= sample_q[channel_idx];
+                            mult_op_d <= sin_val_latched;
+                            compute_step <= STEP_REAL;
+                        end
+
+                        STEP_REAL: begin
+                            real_temp <= extend_product(mult_res_a) + extend_product(mult_res_b);
+                            mult_op_a <= sample_q[channel_idx];
+                            mult_op_b <= cos_val_latched;
+                            mult_op_c <= sample_i[channel_idx];
+                            mult_op_d <= sin_val_latched;
+                            compute_step <= STEP_IMAG;
+                        end
+
+                        STEP_IMAG: begin
+                            logic signed [WIDTH-1:0]             sat_real;
+                            logic signed [WIDTH-1:0]             sat_imag;
+                            imag_temp = extend_product(mult_res_a) - extend_product(mult_res_b);
+                            sat_real = sat_shift(real_temp);
+                            sat_imag = sat_shift(imag_temp);
+                            result_i[channel_idx] <= sat_real;
+                            result_q[channel_idx] <= sat_imag;
+
+                            if (channel_idx == LAST_CHANNEL) begin
+                                state        <= STATE_PACK;
+                                compute_step <= STEP_PRIME;
+                            end else begin
+                                channel_idx   <= channel_idx + 1'b1;
+                                compute_step  <= STEP_PRIME;
+                            end
+                        end
+                        default: compute_step <= STEP_PRIME;
+                    endcase
+                end
+
+                STATE_PACK: begin
+                    m_axis_tdata  <= packed_comb;
+                    m_axis_tlast  <= tlast_latched;
+                    m_axis_tvalid <= 1'b1;
+                    state         <= STATE_OUTPUT;
+                end
+
+                STATE_OUTPUT: begin
+                    if (m_axis_tvalid && m_axis_tready) begin
+                        m_axis_tvalid <= 1'b0;
+                        phase_acc     <= phase_acc_next;
+                        state         <= STATE_IDLE;
+                    end
+                end
+
+                default: state <= STATE_IDLE;
+            endcase
         end
     end
 endmodule
