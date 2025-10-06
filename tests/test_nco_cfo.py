@@ -206,6 +206,40 @@ def _maybe_plot(records_in, records_out, title_prefix: str, real_path: Path, ima
     plt.close(fig)
 
 
+def _plot_segmented(records_in, records_out, title_prefix: str, segment_boundaries, real_path: Path, imag_path: Path):
+    time_axis = np.arange(len(records_in))
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    for ch, ax in enumerate(axes):
+        ax.plot(time_axis, [val[ch].real for val in records_in], label=f"Channel {ch} Input", alpha=0.5)
+        ax.plot(time_axis, [val[ch].real for val in records_out], label=f"Channel {ch} Output", linewidth=2)
+        for boundary in segment_boundaries:
+            ax.axvline(boundary - 0.5, color="k", linestyle="--", alpha=0.35)
+        ax.set_ylabel("Real")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="upper right")
+    axes[-1].set_xlabel("Sample")
+    fig.suptitle(f"{title_prefix} (Real Component)")
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.savefig(real_path, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    for ch, ax in enumerate(axes):
+        ax.plot(time_axis, [val[ch].imag for val in records_in], label=f"Channel {ch} Input", alpha=0.5)
+        ax.plot(time_axis, [val[ch].imag for val in records_out], label=f"Channel {ch} Output", linewidth=2)
+        for boundary in segment_boundaries:
+            ax.axvline(boundary - 0.5, color="k", linestyle="--", alpha=0.35)
+        ax.set_ylabel("Imag")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="upper right")
+    axes[-1].set_xlabel("Sample")
+    fig.suptitle(f"{title_prefix} (Imag Component)")
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.savefig(imag_path, dpi=150)
+    plt.close(fig)
+
+
 @cocotb.test()
 async def nco_cfo_compensation(dut):
     clock = Clock(dut.clk, 5, units="ns")
@@ -369,6 +403,174 @@ async def nco_cfo_dynamic_update(dut):
         "On-the-fly CFO Update",
         plot_dir / "nco_cfo_dynamic_real.png",
         plot_dir / "nco_cfo_dynamic_imag.png",
+    )
+
+
+@cocotb.test()
+async def nco_cfo_multi_cfo_sweep(dut):
+    clock = Clock(dut.clk, 5, units="ns")
+    cocotb.start_soon(clock.start())
+
+    dut.m_axis_tready.value = 1
+    dut.s_axis_tvalid.value = 0
+    dut.s_axis_tlast.value = 0
+    dut.s_axi_awvalid.value = 0
+    dut.s_axi_wvalid.value = 0
+    dut.s_axi_arvalid.value = 0
+    dut.s_axi_bready.value = 0
+    dut.s_axi_rready.value = 0
+    dut.s_axi_wstrb.value = 0
+
+    await _reset(dut)
+
+    segment_cfos = [0.0, 0.0375, -0.12, 0.25]
+    segment_length = 80
+    num_samples = segment_length * len(segment_cfos)
+
+    baseband_ch0 = np.exp(1j * 0.02 * np.arange(segment_length)) * 0.65
+    baseband_ch1 = np.exp(1j * 0.04 * np.arange(segment_length)) * 0.45
+    baseband_segment = np.vstack([baseband_ch0, baseband_ch1])
+
+    quantized_records = []
+    input_records = []
+    phase_schedule = []
+
+    capture_task = cocotb.start_soon(_capture_stream(dut, num_samples))
+
+    phase_acc = 0
+    for seg_idx, freq in enumerate(segment_cfos):
+        phase_inc = int(freq * (1 << ACC_WIDTH)) & PHASE_MASK
+        await _axi_write(dut, 0x0, phase_inc)
+        for idx in range(segment_length):
+            angle = (phase_acc / float(1 << ACC_WIDTH)) * 2 * math.pi
+            rot = complex(math.cos(angle), math.sin(angle))
+            samples = baseband_segment[:, idx] * rot
+            i_vals = [_quantize(samples[ch].real) for ch in range(CHANNELS)]
+            q_vals = [_quantize(samples[ch].imag) for ch in range(CHANNELS)]
+            quantized_records.append(list(zip(i_vals, q_vals)))
+            input_records.append([complex(i_vals[ch] / SCALE, q_vals[ch] / SCALE) for ch in range(CHANNELS)])
+            dut.s_axis_tdata.value = _pack_samples(i_vals, q_vals)
+            dut.s_axis_tvalid.value = 1
+            dut.s_axis_tlast.value = 1 if (seg_idx == len(segment_cfos) - 1 and idx == segment_length - 1) else 0
+            while True:
+                await RisingEdge(dut.clk)
+                if dut.s_axis_tready.value and dut.s_axis_tvalid.value:
+                    break
+            dut.s_axis_tvalid.value = 0
+            dut.s_axis_tlast.value = 0
+            phase_schedule.append(phase_inc)
+            phase_acc = (phase_acc + phase_inc) & PHASE_MASK
+
+    output_records = await capture_task
+
+    expected = _compute_expected_records(quantized_records, phase_schedule)
+    tol = 1.5 / SCALE
+    for idx in range(num_samples):
+        for ch in range(CHANNELS):
+            diff_real = abs(expected[idx][ch].real - output_records[idx][ch].real)
+            diff_imag = abs(expected[idx][ch].imag - output_records[idx][ch].imag)
+            if diff_real > tol or diff_imag > tol:
+                dut._log.error(
+                    "Mismatch sample %d channel %d: expected=%s got=%s"
+                    % (idx, ch, expected[idx][ch], output_records[idx][ch])
+                )
+            assert diff_real <= tol
+            assert diff_imag <= tol
+
+    plot_dir = Path(__file__).resolve().parent / "plots"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    segment_boundaries = [segment_length * i for i in range(1, len(segment_cfos))]
+    _plot_segmented(
+        input_records,
+        output_records,
+        "Multi-CFO Sweep",
+        segment_boundaries,
+        plot_dir / "nco_cfo_sweep_real.png",
+        plot_dir / "nco_cfo_sweep_imag.png",
+    )
+
+
+@cocotb.test()
+async def nco_cfo_constant_input_cfo_sweep(dut):
+    clock = Clock(dut.clk, 5, units="ns")
+    cocotb.start_soon(clock.start())
+
+    dut.m_axis_tready.value = 1
+    dut.s_axis_tvalid.value = 0
+    dut.s_axis_tlast.value = 0
+    dut.s_axi_awvalid.value = 0
+    dut.s_axi_wvalid.value = 0
+    dut.s_axi_arvalid.value = 0
+    dut.s_axi_bready.value = 0
+    dut.s_axi_rready.value = 0
+    dut.s_axi_wstrb.value = 0
+
+    await _reset(dut)
+
+    segment_cfos = [0.0, 0.05, -0.07, 0.18]
+    segment_length = 96
+    num_samples = segment_length * len(segment_cfos)
+
+    t_full = np.arange(num_samples)
+    baseband_ch0_full = np.exp(1j * 0.03 * t_full) * 0.62
+    baseband_ch1_full = np.exp(1j * 0.055 * t_full) * 0.52
+    baseband_full = np.vstack([baseband_ch0_full, baseband_ch1_full])
+
+    quantized_records = []
+    input_records = []
+    phase_schedule = []
+
+    capture_task = cocotb.start_soon(_capture_stream(dut, num_samples))
+
+    for seg_idx, freq in enumerate(segment_cfos):
+        phase_inc = int(freq * (1 << ACC_WIDTH)) & PHASE_MASK
+        await _axi_write(dut, 0x0, phase_inc)
+
+        seg_start = seg_idx * segment_length
+        seg_end = seg_start + segment_length
+        for sample_idx in range(seg_start, seg_end):
+            samples = baseband_full[:, sample_idx]
+            i_vals = [_quantize(samples[ch].real) for ch in range(CHANNELS)]
+            q_vals = [_quantize(samples[ch].imag) for ch in range(CHANNELS)]
+            quantized_records.append(list(zip(i_vals, q_vals)))
+            input_records.append([complex(i_vals[ch] / SCALE, q_vals[ch] / SCALE) for ch in range(CHANNELS)])
+            dut.s_axis_tdata.value = _pack_samples(i_vals, q_vals)
+            dut.s_axis_tvalid.value = 1
+            dut.s_axis_tlast.value = 1 if sample_idx == num_samples - 1 else 0
+            while True:
+                await RisingEdge(dut.clk)
+                if dut.s_axis_tready.value and dut.s_axis_tvalid.value:
+                    break
+            dut.s_axis_tvalid.value = 0
+            dut.s_axis_tlast.value = 0
+            phase_schedule.append(phase_inc)
+
+    output_records = await capture_task
+
+    expected = _compute_expected_records(quantized_records, phase_schedule)
+    tol = 1.5 / SCALE
+    for idx in range(num_samples):
+        for ch in range(CHANNELS):
+            diff_real = abs(expected[idx][ch].real - output_records[idx][ch].real)
+            diff_imag = abs(expected[idx][ch].imag - output_records[idx][ch].imag)
+            if diff_real > tol or diff_imag > tol:
+                dut._log.error(
+                    "Mismatch sample %d channel %d: expected=%s got=%s"
+                    % (idx, ch, expected[idx][ch], output_records[idx][ch])
+                )
+            assert diff_real <= tol
+            assert diff_imag <= tol
+
+    plot_dir = Path(__file__).resolve().parent / "plots"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    segment_boundaries = [segment_length * i for i in range(1, len(segment_cfos))]
+    _plot_segmented(
+        input_records,
+        output_records,
+        "Constant Input, CFO Sweep",
+        segment_boundaries,
+        plot_dir / "nco_cfo_constant_signal_real.png",
+        plot_dir / "nco_cfo_constant_signal_imag.png",
     )
 
 
