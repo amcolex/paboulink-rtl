@@ -47,9 +47,7 @@ module nco_cfo_compensator #(
     localparam int LUT_SIZE = 1 << LUT_ADDR_WIDTH;
 
     // NCO look-up tables for sine and cosine (signed 1.15 format when LUT_DATA_WIDTH=16).
-    (* rom_style = "distributed", ram_style = "distributed" *)
     logic signed [LUT_DATA_WIDTH-1:0] cos_lut [0:LUT_SIZE-1];
-    (* rom_style = "distributed", ram_style = "distributed" *)
     logic signed [LUT_DATA_WIDTH-1:0] sin_lut [0:LUT_SIZE-1];
 
     initial begin
@@ -117,11 +115,11 @@ module nco_cfo_compensator #(
     logic signed [LUT_DATA_WIDTH-1:0]  mult_op_b;
     logic signed [WIDTH-1:0]           mult_op_c;
     logic signed [LUT_DATA_WIDTH-1:0]  mult_op_d;
-    (* use_dsp = "yes" *) logic signed [WIDTH+LUT_DATA_WIDTH-1:0] mult_res_a;
-    (* use_dsp = "yes" *) logic signed [WIDTH+LUT_DATA_WIDTH-1:0] mult_res_b;
+    logic signed [WIDTH+LUT_DATA_WIDTH-1:0] mult_res_a;
+    logic signed [WIDTH+LUT_DATA_WIDTH-1:0] mult_res_b;
 
-    (* use_dsp = "no" *) logic signed [WIDTH+LUT_DATA_WIDTH:0] real_temp;
-    (* use_dsp = "no" *) logic signed [WIDTH+LUT_DATA_WIDTH:0] imag_temp;
+    logic signed [WIDTH+LUT_DATA_WIDTH:0] real_temp;
+    logic signed [WIDTH+LUT_DATA_WIDTH:0] imag_temp;
 
     always_comb begin
         packed_comb = '0;
