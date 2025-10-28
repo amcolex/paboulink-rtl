@@ -36,7 +36,6 @@ module minn_frame_detector #(
     // Parameter sanity checks and derived constants
     // -------------------------------------------------------------------------
     localparam int Q = N_FFT / 4;
-`ifndef YOSYS
     initial begin
         if (N_FFT % 4 != 0) begin
             $error("minn_frame_detector: N_FFT must be divisible by 4");
@@ -45,7 +44,6 @@ module minn_frame_detector #(
             $error("minn_frame_detector: Q must be positive");
         end
     end
-`endif
 
     localparam int WINDOW_DELAY = 4 * Q - 1;
     localparam int Q_PTR_W = (Q > 1) ? $clog2(Q) : 1;
@@ -506,9 +504,7 @@ module minn_frame_detector #(
                 buffer_after_write = buffer_after_write + 1'b1;
                 if (buffer_after_write > BUFFER_LEN_EXT) begin
                     buffer_after_write = BUFFER_LEN_EXT;
-`ifndef YOSYS
                     $error("minn_frame_detector: output buffer overflow");
-`endif
                 end
 
                 holdoff_temp = holdoff_counter_next;
