@@ -77,9 +77,12 @@ def _apply_awgn(rng: np.random.Generator, clean_samples: np.ndarray, snr_db: flo
 
 
 def _create_preamble_symbol(rng: np.random.Generator) -> np.ndarray:
-    seg_a = rng.normal(scale=0.7, size=Q) + 1j * rng.normal(scale=0.7, size=Q)
-    seg_b = rng.normal(scale=0.65, size=Q) + 1j * rng.normal(scale=0.65, size=Q)
-    return np.concatenate([seg_a, seg_a, seg_b, seg_b], axis=0)
+    """Minn preamble with [A, A, -A, -A] quarter structure."""
+    seg = rng.normal(scale=0.7, size=Q) + 1j * rng.normal(scale=0.7, size=Q)
+    power = np.mean(np.abs(seg) ** 2)
+    if power > 0.0:
+        seg = seg / math.sqrt(power)
+    return np.concatenate([seg, seg, -seg, -seg], axis=0)
 
 
 def _generate_qpsk_symbols(rng: np.random.Generator, count: int) -> np.ndarray:
