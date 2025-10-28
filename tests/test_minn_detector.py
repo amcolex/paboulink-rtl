@@ -147,6 +147,8 @@ async def minn_detector_finds_preamble(dut):
     out_ch0_q_vals = []
     out_ch1_i_vals = []
     out_ch1_q_vals = []
+    rtl_metric_r_vals = []
+    rtl_metric_energy_vals = []
 
     def _consume_output():
         nonlocal out_index
@@ -170,6 +172,9 @@ async def minn_detector_finds_preamble(dut):
             if flag_val:
                 observed_flags.append(out_index)
             out_index += 1
+        if dut.dbg_metric_valid.value:
+            rtl_metric_r_vals.append(int(dut.dbg_metric_r.value))
+            rtl_metric_energy_vals.append(int(dut.dbg_metric_energy.value))
 
     for sample in stimulus_ints:
         ch0_i, ch0_q = int(sample[0, 0]), int(sample[0, 1])
@@ -204,6 +209,23 @@ async def minn_detector_finds_preamble(dut):
         f"Detector flagged index {observed_flags[0]}, expected {expected_peak_idx}"
     )
 
+    assert len(rtl_metric_r_vals) == len(rtl_metric_energy_vals), "RTL metric lists length mismatch"
+    valid_metric_span = max(0, payload_len - 4 * Q + 1)
+    assert len(rtl_metric_r_vals) >= valid_metric_span, "RTL metric stream shorter than expected span"
+    rtl_metric_series = np.zeros(payload_len, dtype=np.float64)
+    for idx in range(valid_metric_span):
+        energy_val = float(rtl_metric_energy_vals[idx])
+        if energy_val > 0.0:
+            rtl_metric_series[idx] = (float(rtl_metric_r_vals[idx]) / energy_val) ** 2
+        else:
+            rtl_metric_series[idx] = 0.0
+    np.testing.assert_allclose(
+        rtl_metric_series,
+        metrics[:payload_len],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
     # Generate diagnostic plot comparing metric, threshold, and detected flag trace.
     indices = np.arange(payload_len)
     fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
@@ -215,12 +237,14 @@ async def minn_detector_finds_preamble(dut):
     axes[0].legend(loc="upper right")
     axes[0].set_title("Minn detector input magnitudes")
 
-    axes[1].plot(indices, metrics[:payload_len], label="Minn metric")
+    axes[1].plot(indices, metrics[:payload_len], label="Minn metric (Python)")
+    axes[1].plot(indices, rtl_metric_series, linestyle="--", label="Minn metric (RTL)")
     axes[1].axhline(THRESHOLD, color="red", linestyle="--", label="Threshold")
     axes[1].axvline(expected_peak_idx, color="green", linestyle=":", label="Expected peak")
     axes[1].axvline(observed_flags[0], color="black", linestyle="-.", label="RTL peak")
     axes[1].set_ylabel("Metric")
     axes[1].legend(loc="upper right")
+    axes[1].set_title("Minn metric comparison (Python vs RTL)")
 
     flag_trace = np.zeros(payload_len)
     count = min(len(output_flags), payload_len)
@@ -241,8 +265,10 @@ async def minn_detector_finds_preamble(dut):
         indices_out = np.arange(out_sample_count)
         flag_trace_out = np.zeros(out_sample_count)
         flag_trace_out[:len(output_flags)] = output_flags
+        metrics_out = metrics[:out_sample_count]
+        rtl_metrics_out = rtl_metric_series[:out_sample_count]
 
-        fig_out, axes_out = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
+        fig_out, axes_out = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
 
         axes_out[0].plot(indices_out, out_ch0_i_vals, label="ch0 I")
         axes_out[0].plot(indices_out, out_ch0_q_vals, label="ch0 Q")
@@ -250,7 +276,7 @@ async def minn_detector_finds_preamble(dut):
             axes_out[0].axvline(observed_flags[0], color="black", linestyle="-.", label="detect_flag pulse")
         axes_out[0].set_ylabel("Channel 0")
         axes_out[0].legend(loc="upper right")
-        axes_out[0].set_title("Minn detector output samples")
+        axes_out[0].set_title("RTL Minn detector output samples")
 
         axes_out[1].plot(indices_out, out_ch1_i_vals, label="ch1 I")
         axes_out[1].plot(indices_out, out_ch1_q_vals, label="ch1 Q")
@@ -259,10 +285,21 @@ async def minn_detector_finds_preamble(dut):
         axes_out[1].set_ylabel("Channel 1")
         axes_out[1].legend(loc="upper right")
 
-        axes_out[2].step(indices_out, flag_trace_out, where="post", label="detect_flag")
-        axes_out[2].set_ylabel("Flag")
-        axes_out[2].set_xlabel("Output sample index")
+        axes_out[2].plot(indices_out, metrics_out, label="Minn metric (Python)")
+        axes_out[2].plot(indices_out, rtl_metrics_out, linestyle="--", label="Minn metric (RTL)")
+        axes_out[2].axhline(THRESHOLD, color="red", linestyle="--", label="Threshold")
+        if expected_peak_idx < out_sample_count:
+            axes_out[2].axvline(expected_peak_idx, color="green", linestyle=":", label="Expected peak")
+        if observed_flags:
+            axes_out[2].axvline(observed_flags[0], color="black", linestyle="-.", label="RTL peak")
+        axes_out[2].set_ylabel("Metric")
         axes_out[2].legend(loc="upper right")
+        axes_out[2].set_title("Minn metric comparison (RTL vs Python)")
+
+        axes_out[3].step(indices_out, flag_trace_out, where="post", label="detect_flag")
+        axes_out[3].set_ylabel("Flag")
+        axes_out[3].set_xlabel("Output sample index")
+        axes_out[3].legend(loc="upper right")
 
         plt.tight_layout()
         plot_path_out = PLOT_DIR / "minn_detector_output_stream.png"

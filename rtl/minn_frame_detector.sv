@@ -27,12 +27,16 @@ module minn_frame_detector #(
     output logic signed [WIDTH-1:0]      out_ch0_q,
     output logic signed [WIDTH-1:0]      out_ch1_i,
     output logic signed [WIDTH-1:0]      out_ch1_q,
-    output logic                         detect_flag
+    output logic                         detect_flag,
+    output logic                         dbg_metric_valid,
+    output logic [(2*WIDTH + $clog2(N_FFT/4 + 1) + 5)-1:0] dbg_metric_r,
+    output logic [(2*WIDTH + $clog2(((3*(N_FFT/4))) + 1) + 4)-1:0] dbg_metric_energy
 );
     // -------------------------------------------------------------------------
     // Parameter sanity checks and derived constants
     // -------------------------------------------------------------------------
     localparam int Q = N_FFT / 4;
+`ifndef YOSYS
     initial begin
         if (N_FFT % 4 != 0) begin
             $error("minn_frame_detector: N_FFT must be divisible by 4");
@@ -41,6 +45,7 @@ module minn_frame_detector #(
             $error("minn_frame_detector: Q must be positive");
         end
     end
+`endif
 
     localparam int WINDOW_DELAY = 4 * Q - 1;
     localparam int Q_PTR_W = (Q > 1) ? $clog2(Q) : 1;
@@ -244,6 +249,9 @@ module minn_frame_detector #(
             out_ch1_i         <= '0;
             out_ch1_q         <= '0;
             flag_buffer       <= '0;
+            dbg_metric_valid  <= 1'b0;
+            dbg_metric_r      <= '0;
+            dbg_metric_energy <= '0;
             for (idx = 0; idx < Q; idx++) begin
                 delay_q_mem[idx]     = '0;
                 sumB_fifo_real[idx]  = '0;
@@ -265,6 +273,7 @@ module minn_frame_detector #(
             // Default outputs de-asserted each cycle unless overwritten later.
             out_valid   <= 1'b0;
             detect_flag <= 1'b0;
+            dbg_metric_valid <= 1'b0;
 
             // Retain current gate state unless updated in the processing block.
             gate_active_next = gate_active;
@@ -445,6 +454,12 @@ module minn_frame_detector #(
                     window_start_idx = sample_idx - WINDOW_DELAY;
                 end
 
+                if (metric_valid) begin
+                    dbg_metric_valid <= 1'b1;
+                    dbg_metric_r <= R_value;
+                    dbg_metric_energy <= energy_value;
+                end
+
                 // Gate management and peak tracking
                 if (metric_valid && above_threshold && !gate_active && detection_armed_next) begin
                     gate_active_next = 1'b1;
@@ -491,7 +506,9 @@ module minn_frame_detector #(
                 buffer_after_write = buffer_after_write + 1'b1;
                 if (buffer_after_write > BUFFER_LEN_EXT) begin
                     buffer_after_write = BUFFER_LEN_EXT;
+`ifndef YOSYS
                     $error("minn_frame_detector: output buffer overflow");
+`endif
                 end
 
                 holdoff_temp = holdoff_counter_next;
