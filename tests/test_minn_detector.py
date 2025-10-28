@@ -34,6 +34,7 @@ FLUSH_LEN = 4 * Q
 WINDOW_DELAY = 4 * Q - 1
 PLOT_DIR = Path(__file__).parent / "plots"
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
+NUM_ACTIVE_SUBCARRIERS = 1200
 
 
 def _build_baseband_sequence(seed: int = 0x5A17, snr_db: float = TEST_SNR_DB) -> tuple[np.ndarray, np.ndarray]:
@@ -77,12 +78,24 @@ def _apply_awgn(rng: np.random.Generator, clean_samples: np.ndarray, snr_db: flo
 
 
 def _create_preamble_symbol(rng: np.random.Generator) -> np.ndarray:
-    """Minn preamble with [A, A, -A, -A] quarter structure."""
-    seg = rng.normal(scale=0.7, size=Q) + 1j * rng.normal(scale=0.7, size=Q)
-    power = np.mean(np.abs(seg) ** 2)
+    """Minn preamble built from sparse BPSK tones ⇒ [A, A, -A, -A] in time."""
+    half_active = NUM_ACTIVE_SUBCARRIERS // 2
+    negative = np.arange(-half_active, 0)
+    positive = np.arange(1, half_active + 1)
+    centered_idx = np.concatenate([negative, positive])
+    quarter_idx = centered_idx[(centered_idx % 4) == 0]
+    spectrum = np.zeros(N_FFT, dtype=np.complex128)
+    bpsk = rng.choice([-1.0, 1.0], size=quarter_idx.shape[0])
+    dc = N_FFT // 2
+    placement = (dc + quarter_idx) % N_FFT
+    spectrum[placement] = bpsk
+    symbol = np.fft.ifft(np.fft.ifftshift(spectrum))
+    half = N_FFT // 2
+    symbol[half:] = -symbol[half:]
+    power = np.mean(np.abs(symbol) ** 2)
     if power > 0.0:
-        seg = seg / math.sqrt(power)
-    return np.concatenate([seg, seg, -seg, -seg], axis=0)
+        symbol = symbol / math.sqrt(power)
+    return symbol
 
 
 def _generate_qpsk_symbols(rng: np.random.Generator, count: int) -> np.ndarray:
