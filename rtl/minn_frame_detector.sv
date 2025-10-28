@@ -55,6 +55,8 @@ module minn_frame_detector #(
     localparam int BUFFER_PTR_W = (BUFFER_LEN > 1) ? $clog2(BUFFER_LEN) : 1;
     localparam logic [BUFFER_PTR_W:0] BUFFER_LEN_EXT = (BUFFER_PTR_W+1)'(BUFFER_LEN);
     localparam logic [BUFFER_PTR_W-1:0] BUFFER_LEN_MINUS_ONE = BUFFER_PTR_W'(BUFFER_LEN-1);
+    localparam int OUTPUT_ARM_LEVEL = BUFFER_LEN - 1;
+    localparam logic [BUFFER_PTR_W:0] OUTPUT_ARM_LEVEL_EXT = (BUFFER_PTR_W+1)'(OUTPUT_ARM_LEVEL);
 
     // Sample energy and correlation bit widths.
     localparam int ENERGY_SAMPLE_W = 2 * WIDTH + 1;       // |I|^2 + |Q|^2 (per antenna)
@@ -129,6 +131,7 @@ module minn_frame_detector #(
     logic [31:0]              peak_index;
     logic                     detection_armed;
     logic [31:0]              holdoff_counter;
+    logic                     output_armed;
 
     // Sample index counter
     logic [31:0] sample_idx;
@@ -206,8 +209,8 @@ module minn_frame_detector #(
     bit pop_output;
     sample_t out_sample;
     logic [31:0]                  holdoff_temp;
-    bit gate_can_pop;
-    bit gate_closed_this_cycle;
+    bit flag_hits_head;
+    logic                         output_armed_next;
 
     // -------------------------------------------------------------------------
     // Reset logic: clear memories and registers
@@ -239,6 +242,7 @@ module minn_frame_detector #(
             peak_index        <= 32'd0;
             detection_armed   <= 1'b1;
             holdoff_counter   <= 32'd0;
+            output_armed      <= 1'b0;
             sample_idx        <= 32'd0;
             out_valid         <= 1'b0;
             detect_flag       <= 1'b0;
@@ -280,9 +284,10 @@ module minn_frame_detector #(
             peak_index_next = peak_index;
             detection_armed_next = detection_armed;
             holdoff_counter_next = holdoff_counter;
+            output_armed_next = output_armed;
             buffer_after_write = buffer_occupancy;
             pop_output = 1'b0;
-            gate_closed_this_cycle = 1'b0;
+            flag_hits_head = 1'b0;
 
             if (in_valid) begin
                 // -----------------------------------------------------------------
@@ -487,10 +492,12 @@ module minn_frame_detector #(
                                     flag_ptr_ext = flag_ptr_ext - BUFFER_LEN_EXT;
                                 end
                                 flag_buffer[flag_ptr_ext[BUFFER_PTR_W-1:0]] <= 1'b1;
+                                if (flag_ptr_ext[BUFFER_PTR_W-1:0] == sample_rd_ptr) begin
+                                    flag_hits_head = 1'b1;
+                                end
                             end
                         end
                         holdoff_counter_next = N_FFT;
-                        gate_closed_this_cycle = 1'b1;
                     end
                 end
 
@@ -519,14 +526,14 @@ module minn_frame_detector #(
                 sample_idx <= sample_idx + 1'b1;
             end
 
+            if (!output_armed_next && (buffer_after_write >= OUTPUT_ARM_LEVEL_EXT)) begin
+                output_armed_next = 1'b1;
+            end
+
             // -----------------------------------------------------------------
             // Decide whether an output sample can be emitted this cycle
             // -----------------------------------------------------------------
-            gate_can_pop = !gate_active_next || (gate_active_next && (peak_index_next > base_sample_idx));
-            if (gate_closed_this_cycle) begin
-                gate_can_pop = 1'b0;
-            end
-            pop_output = (sample_idx >= WINDOW_DELAY) && gate_can_pop && (buffer_after_write != 0);
+            pop_output = output_armed_next && (buffer_after_write != 0);
             if (pop_output) begin
                 out_valid <= 1'b1;
                 out_sample = sample_buffer[sample_rd_ptr];
@@ -534,7 +541,7 @@ module minn_frame_detector #(
                 out_ch0_q <= out_sample.ch0_q;
                 out_ch1_i <= out_sample.ch1_i;
                 out_ch1_q <= out_sample.ch1_q;
-                detect_flag <= flag_buffer[sample_rd_ptr];
+                detect_flag <= flag_buffer[sample_rd_ptr] | flag_hits_head;
                 flag_buffer[sample_rd_ptr] <= 1'b0;
                 sample_rd_ptr <= (sample_rd_ptr == BUFFER_LEN_MINUS_ONE) ? '0 : sample_rd_ptr + 1'b1;
                 buffer_occupancy <= buffer_after_write - 1'b1;
@@ -549,6 +556,7 @@ module minn_frame_detector #(
             peak_index <= peak_index_next;
             detection_armed <= detection_armed_next;
             holdoff_counter <= holdoff_counter_next;
+            output_armed <= output_armed_next;
         end
     end
 endmodule

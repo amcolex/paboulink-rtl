@@ -29,30 +29,51 @@ OFDM_SYMBOL_LEN = N_FFT + CP_LEN
 NUM_DATA_SYMBOLS = 2
 NUM_FRAMES = 2
 FRAME_GAP_SYMBOLS = 3
+TEST_SNR_DB = 10.0
 FLUSH_LEN = 4 * Q
 WINDOW_DELAY = 4 * Q - 1
 PLOT_DIR = Path(__file__).parent / "plots"
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _build_baseband_sequence(seed: int = 0x5A17) -> np.ndarray:
+def _build_baseband_sequence(seed: int = 0x5A17, snr_db: float = TEST_SNR_DB) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
-    prefix = _complex_noise(rng, OFDM_SYMBOL_LEN, scale=0.05)
-    frames = []
+    clean_payload = _build_clean_sequence(rng)
+    noisy_payload = _apply_awgn(rng, clean_payload, snr_db)
+    return clean_payload, noisy_payload
+
+
+def _build_clean_sequence(rng: np.random.Generator) -> np.ndarray:
+    prefix = np.zeros((OFDM_SYMBOL_LEN, 2), dtype=np.complex128)
+    frames: list[np.ndarray] = []
     for frame_idx in range(NUM_FRAMES):
         frames.append(_build_frame_samples(rng))
         if frame_idx != NUM_FRAMES - 1:
             guard_len = FRAME_GAP_SYMBOLS * OFDM_SYMBOL_LEN
-            frames.append(_complex_noise(rng, guard_len, scale=0.05))
-    suffix = _complex_noise(rng, OFDM_SYMBOL_LEN, scale=0.05)
+            frames.append(np.zeros((guard_len, 2), dtype=np.complex128))
+    suffix = np.zeros((OFDM_SYMBOL_LEN, 2), dtype=np.complex128)
     return np.concatenate([prefix, *frames, suffix], axis=0)
 
 
-def _complex_noise(rng: np.random.Generator, length: int, scale: float) -> np.ndarray:
-    return (
-        rng.normal(scale=scale, size=(length, 2)) +
-        1j * rng.normal(scale=scale, size=(length, 2))
+def _apply_awgn(rng: np.random.Generator, clean_samples: np.ndarray, snr_db: float) -> np.ndarray:
+    magnitude_sq = np.abs(clean_samples) ** 2
+    if magnitude_sq.size == 0:
+        return clean_samples.copy()
+    active_mask = magnitude_sq > 0.0
+    if np.any(active_mask):
+        signal_power = magnitude_sq[active_mask].mean()
+    else:
+        signal_power = 0.0
+    if signal_power == 0.0:
+        return clean_samples.copy()
+    snr_linear = 10.0 ** (snr_db / 10.0)
+    noise_power = signal_power / snr_linear
+    noise_sigma = math.sqrt(noise_power / 2.0)
+    noise = (
+        rng.normal(scale=noise_sigma, size=clean_samples.shape)
+        + 1j * rng.normal(scale=noise_sigma, size=clean_samples.shape)
     )
+    return clean_samples + noise
 
 
 def _create_preamble_symbol(rng: np.random.Generator) -> np.ndarray:
@@ -171,7 +192,7 @@ def _find_gate_peaks(metrics: np.ndarray, threshold: float) -> list[int]:
 
 
 def _prepare_stimulus() -> dict:
-    payload_complex = _build_baseband_sequence()
+    payload_clean, payload_complex = _build_baseband_sequence()
     payload_ints = _quantize_samples(payload_complex)
     metrics = _compute_minn_metric(payload_ints)
     peak_indices = _find_gate_peaks(metrics, THRESHOLD)
@@ -180,6 +201,7 @@ def _prepare_stimulus() -> dict:
     flush = np.zeros((FLUSH_LEN, 2, 2), dtype=int)
     stimulus_ints = np.concatenate([payload_ints, flush], axis=0)
     return {
+        "payload_clean": payload_clean,
         "payload_complex": payload_complex,
         "payload_ints": payload_ints,
         "stimulus_ints": stimulus_ints,
