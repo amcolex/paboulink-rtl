@@ -12,7 +12,7 @@ module minn_frame_detector #(
     parameter int WIDTH = 12,
     parameter int N_FFT = 2048,
     // Square-root of the Minn gate threshold expressed in Q1.15 format.
-    parameter int K_Q15 = 16'd14666,
+    parameter int K_Q15 = 32'd14666,
     parameter int SMOOTH_LEN = 1  // Placeholder for future smoothing support (1 disables smoothing).
 ) (
     input  logic                         clk,
@@ -27,10 +27,13 @@ module minn_frame_detector #(
     output logic signed [WIDTH-1:0]      out_ch0_q,
     output logic signed [WIDTH-1:0]      out_ch1_i,
     output logic signed [WIDTH-1:0]      out_ch1_q,
-    output logic                         detect_flag,
+    output logic                         detect_flag
+`ifdef MINN_DEBUG
+    ,
     output logic                         dbg_metric_valid,
     output logic [(2*WIDTH + $clog2(N_FFT/4 + 1) + 5)-1:0] dbg_metric_r,
     output logic [(2*WIDTH + $clog2(((3*(N_FFT/4))) + 1) + 4)-1:0] dbg_metric_energy
+`endif
 );
     // -------------------------------------------------------------------------
     // Parameter sanity checks and derived constants
@@ -51,7 +54,7 @@ module minn_frame_detector #(
     localparam int P_DELAY_PTR_W = (P_DELAY_LEN > 1) ? $clog2(P_DELAY_LEN) : 1;
     localparam int ENERGY_LEN = 3 * Q;
     localparam int ENERGY_PTR_W = (ENERGY_LEN > 1) ? $clog2(ENERGY_LEN) : 1;
-    localparam int BUFFER_LEN = 8 * Q;
+    localparam int BUFFER_LEN = N_FFT + Q;
     localparam int BUFFER_PTR_W = (BUFFER_LEN > 1) ? $clog2(BUFFER_LEN) : 1;
     localparam logic [BUFFER_PTR_W:0] BUFFER_LEN_EXT = (BUFFER_PTR_W+1)'(BUFFER_LEN);
     localparam logic [BUFFER_PTR_W-1:0] BUFFER_LEN_MINUS_ONE = BUFFER_PTR_W'(BUFFER_LEN-1);
@@ -68,9 +71,111 @@ module minn_frame_detector #(
     localparam int CORR_SUM_W = P_STREAM_W + $clog2(Q + 1) + 2;
     localparam int R_WIDTH = CORR_SUM_W + 1;
     localparam int R_SHIFT_WIDTH = R_WIDTH + 15;
-    localparam int RATIO_CMP_W = R_SHIFT_WIDTH + ENERGY_ACC_W;
+    localparam int LOG_FRAC = 16;
+    localparam int BASE_LOG_WIDTH = (R_SHIFT_WIDTH > ENERGY_ACC_W) ? R_SHIFT_WIDTH : ENERGY_ACC_W;
+    localparam int MAX_LOG_WIDTH = (BASE_LOG_WIDTH > 32) ? BASE_LOG_WIDTH : 32;
+    localparam int LOG_INT_W = (MAX_LOG_WIDTH > 1) ? $clog2(MAX_LOG_WIDTH) : 1;
+    localparam int LOG_TOTAL_W = LOG_INT_W + LOG_FRAC;
     localparam int ENERGY_TIMES_K_W = ENERGY_ACC_W + 16;
     localparam int ENERGY_ASSIGN_W = (R_SHIFT_WIDTH < ENERGY_TIMES_K_W) ? R_SHIFT_WIDTH : ENERGY_TIMES_K_W;
+
+    function automatic int unsigned count_leading_zeros(
+        input logic [MAX_LOG_WIDTH-1:0] value,
+        input int unsigned              width
+    );
+        int unsigned count;
+        count = 0;
+        if (width == 0) begin
+            return 0;
+        end
+        for (int i = width-1; i >= 0; i--) begin
+            if (!value[i] && count == (width-1 - i)) begin
+                count++;
+            end
+        end
+        return count;
+    endfunction
+
+    function automatic logic [LOG_TOTAL_W-1:0] log2_fixed(
+        input logic [MAX_LOG_WIDTH-1:0] value,
+        input int unsigned              width
+    );
+        logic [LOG_TOTAL_W-1:0] result;
+        logic [MAX_LOG_WIDTH-1:0] masked;
+        logic [MAX_LOG_WIDTH-1:0] normalized;
+        logic [LOG_FRAC-1:0] frac;
+        logic [LOG_INT_W-1:0] int_part;
+        int unsigned lz;
+        int unsigned msb;
+        int unsigned shift_amt;
+        logic [MAX_LOG_WIDTH-1:0] shifted_norm;
+        bit all_zero;
+        result = '0;
+        if (width == 0) begin
+            return result;
+        end
+
+        masked = value;
+        for (int i = MAX_LOG_WIDTH-1; i >= width; i--) begin
+            masked[i] = 1'b0;
+        end
+
+        all_zero = 1'b1;
+        for (int i = 0; i < width; i++) begin
+            if (masked[i]) begin
+                all_zero = 1'b0;
+            end
+        end
+
+        if (all_zero) begin
+            return result;
+        end
+
+        lz = count_leading_zeros(masked, width);
+        msb = width - lz - 1;
+        normalized = masked << lz;
+        if (LOG_FRAC == 0) begin
+            frac = '0;
+        end else if (width >= LOG_FRAC + 1) begin
+            frac = normalized[width-2 -: LOG_FRAC];
+        end else begin
+            shift_amt = LOG_FRAC - (width - 1);
+            shifted_norm = normalized << shift_amt;
+            frac = shifted_norm[LOG_FRAC-1:0];
+        end
+        int_part = msb[LOG_INT_W-1:0];
+        result = {int_part, frac};
+        return result;
+    endfunction
+
+    function automatic logic [LOG_TOTAL_W-1:0] log2_fixed_const(input int unsigned value);
+        logic [MAX_LOG_WIDTH-1:0] extended;
+        logic [31:0] value_bits;
+        int unsigned width;
+        bit all_zero;
+        extended = '0;
+        value_bits = value[31:0];
+        width = (MAX_LOG_WIDTH >= 32) ? 32 : MAX_LOG_WIDTH;
+        if (width == 0) begin
+            width = 1;
+        end
+        for (int i = 0; i < width; i++) begin
+            extended[i] = (i < 32) ? value_bits[i] : 1'b0;
+        end
+        all_zero = 1'b1;
+        for (int i = 0; i < width; i++) begin
+            if (extended[i]) begin
+                all_zero = 1'b0;
+            end
+        end
+        if (all_zero) begin
+            width = (width == 0) ? 1 : width;
+        end
+        return log2_fixed(extended, width);
+    endfunction
+
+    localparam logic signed [LOG_TOTAL_W:0] LOG_K_Q15 =
+        $signed({1'b0, log2_fixed_const(K_Q15)});
 
     // -------------------------------------------------------------------------
     // Sample delay for computing x[n-Q] and buffer for output alignment
@@ -85,12 +190,17 @@ module minn_frame_detector #(
     sample_t delay_q_mem [0:Q-1];
     logic [Q_PTR_W-1:0] delay_q_ptr;
 
-    sample_t sample_buffer [0:BUFFER_LEN-1];
+    (* ram_style = "block", ramstyle = "M20K" *) sample_t sample_buffer_mem [0:BUFFER_LEN-1];
     logic [BUFFER_LEN-1:0] flag_buffer;
     logic [BUFFER_PTR_W-1:0] sample_wr_ptr;
     logic [BUFFER_PTR_W-1:0] sample_rd_ptr;
     logic [BUFFER_PTR_W:0]   buffer_occupancy;
     logic [31:0]             base_sample_idx;
+    sample_t                 sample_rd_data;
+    logic                    pop_output_d;
+    logic                    flag_pop_value;
+    logic                    flag_pop_value_d;
+    logic                    flag_hits_head_d;
 
     // -------------------------------------------------------------------------
     // Product stream buffers (SumB window and SumA delayed window)
@@ -126,8 +236,7 @@ module minn_frame_detector #(
     // Gate/peak tracking state
     // -------------------------------------------------------------------------
     logic gate_active;
-    logic [R_SHIFT_WIDTH-1:0] peak_ratio_num;
-    logic [ENERGY_ACC_W-1:0]  peak_energy_den;
+    logic signed [LOG_TOTAL_W:0] peak_ratio_log;
     logic [31:0]              peak_index;
     logic                     detection_armed;
     logic [31:0]              holdoff_counter;
@@ -138,8 +247,7 @@ module minn_frame_detector #(
 
     // Temporary variables reused within sequential logic
     logic gate_active_next;
-    logic [R_SHIFT_WIDTH-1:0] peak_ratio_num_next;
-    logic [ENERGY_ACC_W-1:0]  peak_energy_den_next;
+    logic signed [LOG_TOTAL_W:0] peak_ratio_log_next;
     logic [31:0]              peak_index_next;
     logic                     detection_armed_next;
     logic [31:0]              holdoff_counter_next;
@@ -196,12 +304,13 @@ module minn_frame_detector #(
     logic [R_WIDTH-1:0]           R_value;
     logic [R_SHIFT_WIDTH-1:0]     ratio_num;
     logic [ENERGY_ACC_W-1:0]      energy_value;
-    logic [ENERGY_ACC_W+16-1:0]   energy_times_k;
+    logic [ENERGY_TIMES_K_W-1:0]  energy_times_k;
     logic [R_SHIFT_WIDTH-1:0]     threshold_scaled;
-    bit above_threshold;
+    logic [LOG_TOTAL_W-1:0]       ratio_log_value;
+    logic [LOG_TOTAL_W-1:0]       energy_log_value;
+    logic signed [LOG_TOTAL_W:0]  ratio_log_diff;
+    bit                           above_threshold;
     logic [31:0]                  window_start_idx;
-    logic [RATIO_CMP_W-1:0]       lhs;
-    logic [RATIO_CMP_W-1:0]       rhs;
     logic [31:0]                  offset;
     logic [BUFFER_PTR_W:0]        flag_ptr_ext;
     logic [BUFFER_PTR_W:0]        buffer_after_write;
@@ -237,13 +346,16 @@ module minn_frame_detector #(
             energy_count      <= '0;
             energy_sum        <= '0;
             gate_active       <= 1'b0;
-            peak_ratio_num    <= '0;
-            peak_energy_den   <= '0;
+            peak_ratio_log    <= '0;
             peak_index        <= 32'd0;
             detection_armed   <= 1'b1;
             holdoff_counter   <= 32'd0;
             output_armed      <= 1'b0;
             sample_idx        <= 32'd0;
+            sample_rd_data    <= '0;
+            pop_output_d      <= 1'b0;
+            flag_pop_value_d  <= 1'b0;
+            flag_hits_head_d  <= 1'b0;
             out_valid         <= 1'b0;
             detect_flag       <= 1'b0;
             out_ch0_i         <= '0;
@@ -251,9 +363,11 @@ module minn_frame_detector #(
             out_ch1_i         <= '0;
             out_ch1_q         <= '0;
             flag_buffer       <= '0;
+`ifdef MINN_DEBUG
             dbg_metric_valid  <= 1'b0;
             dbg_metric_r      <= '0;
             dbg_metric_energy <= '0;
+`endif
             for (idx = 0; idx < Q; idx++) begin
                 delay_q_mem[idx]     = '0;
                 sumB_fifo_real[idx]  = '0;
@@ -268,19 +382,17 @@ module minn_frame_detector #(
             for (idx = 0; idx < ENERGY_LEN; idx++) begin
                 energy_fifo[idx] = '0;
             end
-            for (idx = 0; idx < BUFFER_LEN; idx++) begin
-                sample_buffer[idx] = '0;
-            end
         end else begin
             // Default outputs de-asserted each cycle unless overwritten later.
             out_valid   <= 1'b0;
             detect_flag <= 1'b0;
+`ifdef MINN_DEBUG
             dbg_metric_valid <= 1'b0;
+`endif
 
             // Retain current gate state unless updated in the processing block.
             gate_active_next = gate_active;
-            peak_ratio_num_next = peak_ratio_num;
-            peak_energy_den_next = peak_energy_den;
+            peak_ratio_log_next = peak_ratio_log;
             peak_index_next = peak_index;
             detection_armed_next = detection_armed;
             holdoff_counter_next = holdoff_counter;
@@ -288,6 +400,7 @@ module minn_frame_detector #(
             buffer_after_write = buffer_occupancy;
             pop_output = 1'b0;
             flag_hits_head = 1'b0;
+            flag_pop_value = 1'b0;
 
             if (in_valid) begin
                 // -----------------------------------------------------------------
@@ -450,6 +563,9 @@ module minn_frame_detector #(
                     threshold_scaled[ENERGY_ASSIGN_W-1:0] = energy_times_k[ENERGY_ASSIGN_W-1:0];
                 end
                 above_threshold = metric_valid && (energy_value != '0) && (ratio_num >= threshold_scaled);
+                ratio_log_value = log2_fixed({{(MAX_LOG_WIDTH-R_SHIFT_WIDTH){1'b0}}, ratio_num}, R_SHIFT_WIDTH);
+                energy_log_value = log2_fixed({{(MAX_LOG_WIDTH-ENERGY_ACC_W){1'b0}}, energy_value}, ENERGY_ACC_W);
+                ratio_log_diff = $signed({1'b0, ratio_log_value}) - $signed({1'b0, energy_log_value});
 
                 // Determine the window start index associated with this metric.
                 window_start_idx = 32'd0;
@@ -457,27 +573,24 @@ module minn_frame_detector #(
                     window_start_idx = sample_idx - WINDOW_DELAY;
                 end
 
+`ifdef MINN_DEBUG
                 if (metric_valid) begin
                     dbg_metric_valid <= 1'b1;
                     dbg_metric_r <= R_value;
                     dbg_metric_energy <= energy_value;
                 end
+`endif
 
                 // Gate management and peak tracking
                 if (metric_valid && above_threshold && !gate_active && detection_armed_next) begin
                     gate_active_next = 1'b1;
                     detection_armed_next = 1'b0;
-                    peak_ratio_num_next = ratio_num;
-                    peak_energy_den_next = energy_value;
+                    peak_ratio_log_next = ratio_log_diff;
                     peak_index_next = window_start_idx;
                 end else if (gate_active) begin
                     if (metric_valid && above_threshold) begin
-                        // Compare current ratio (ratio_num/energy_value) to peak ratio
-                        lhs = ratio_num * peak_energy_den_next;
-                        rhs = peak_ratio_num_next * energy_value;
-                        if (lhs >= rhs) begin
-                            peak_ratio_num_next = ratio_num;
-                            peak_energy_den_next = energy_value;
+                        if (ratio_log_diff >= peak_ratio_log_next) begin
+                            peak_ratio_log_next = ratio_log_diff;
                             peak_index_next = window_start_idx;
                         end
                     end else if (!above_threshold) begin
@@ -504,7 +617,7 @@ module minn_frame_detector #(
                 // -----------------------------------------------------------------
                 // Push current sample into the output buffer
                 // -----------------------------------------------------------------
-                sample_buffer[sample_wr_ptr] <= current_sample;
+                sample_buffer_mem[sample_wr_ptr] <= current_sample;
                 flag_buffer[sample_wr_ptr] <= 1'b0;
                 sample_wr_ptr <= (sample_wr_ptr == BUFFER_LEN_MINUS_ONE) ? '0 : sample_wr_ptr + 1'b1;
 
@@ -535,13 +648,8 @@ module minn_frame_detector #(
             // -----------------------------------------------------------------
             pop_output = output_armed_next && (buffer_after_write != 0);
             if (pop_output) begin
-                out_valid <= 1'b1;
-                out_sample = sample_buffer[sample_rd_ptr];
-                out_ch0_i <= out_sample.ch0_i;
-                out_ch0_q <= out_sample.ch0_q;
-                out_ch1_i <= out_sample.ch1_i;
-                out_ch1_q <= out_sample.ch1_q;
-                detect_flag <= flag_buffer[sample_rd_ptr] | flag_hits_head;
+                sample_rd_data <= sample_buffer_mem[sample_rd_ptr];
+                flag_pop_value = flag_buffer[sample_rd_ptr];
                 flag_buffer[sample_rd_ptr] <= 1'b0;
                 sample_rd_ptr <= (sample_rd_ptr == BUFFER_LEN_MINUS_ONE) ? '0 : sample_rd_ptr + 1'b1;
                 buffer_occupancy <= buffer_after_write - 1'b1;
@@ -550,9 +658,22 @@ module minn_frame_detector #(
                 buffer_occupancy <= buffer_after_write;
             end
 
+            pop_output_d     <= pop_output;
+            flag_pop_value_d <= flag_pop_value;
+            flag_hits_head_d <= flag_hits_head;
+
+            if (pop_output_d) begin
+                out_valid <= 1'b1;
+                out_sample = sample_rd_data;
+                out_ch0_i <= out_sample.ch0_i;
+                out_ch0_q <= out_sample.ch0_q;
+                out_ch1_i <= out_sample.ch1_i;
+                out_ch1_q <= out_sample.ch1_q;
+                detect_flag <= flag_pop_value_d | flag_hits_head_d;
+            end
+
             gate_active <= gate_active_next;
-            peak_ratio_num <= peak_ratio_num_next;
-            peak_energy_den <= peak_energy_den_next;
+            peak_ratio_log <= peak_ratio_log_next;
             peak_index <= peak_index_next;
             detection_armed <= detection_armed_next;
             holdoff_counter <= holdoff_counter_next;

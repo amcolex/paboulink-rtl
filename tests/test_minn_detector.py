@@ -520,7 +520,7 @@ def test_minn_detector():
         },
         sim_build=str(build_dir),
         simulator="verilator",
-        verilog_compile_args=["-sv"],
+            verilog_compile_args=["-sv", "-DMINN_DEBUG"],
         extra_env={
             "COCOTB_RESULTS_FILE": str(build_dir / "results.xml"),
         },
