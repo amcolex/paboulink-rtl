@@ -1,5 +1,3 @@
-`default_nettype none
-
 module minn_running_sum #(
     parameter int WIDTH = 16,
     parameter int DEPTH = 16

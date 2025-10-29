@@ -1,4 +1,3 @@
-`default_nettype none
 
 module minn_preamble_detector #(
     parameter int INPUT_WIDTH       = 12,

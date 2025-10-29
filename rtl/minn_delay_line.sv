@@ -1,5 +1,3 @@
-`default_nettype none
-
 module minn_delay_line #(
     parameter int WIDTH = 16,
     parameter int DEPTH = 1

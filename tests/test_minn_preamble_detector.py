@@ -199,6 +199,41 @@ async def minn_detector_flags_expected_sample(dut):
     ch0_i, ch0_q, _ = quantize_samples(noisy_ch0, INPUT_WIDTH)
     ch1_i, ch1_q, _ = quantize_samples(noisy_ch1, INPUT_WIDTH)
 
+    quarter_len = NFFT // 4
+    (
+        ch0_corr_recent,
+        ch0_corr_prev,
+        ch0_energy_recent,
+        ch0_energy_prev,
+        ch0_energy_prev2,
+    ) = antenna_metrics(ch0_i.astype(np.float64), ch0_q.astype(np.float64), quarter_len)
+    (
+        ch1_corr_recent,
+        ch1_corr_prev,
+        ch1_energy_recent,
+        ch1_energy_prev,
+        ch1_energy_prev2,
+    ) = antenna_metrics(ch1_i.astype(np.float64), ch1_q.astype(np.float64), quarter_len)
+
+    corr_total = (ch0_corr_recent + ch0_corr_prev) + (ch1_corr_recent + ch1_corr_prev)
+    energy_total = (ch0_energy_recent + ch0_energy_prev + ch0_energy_prev2) + (
+        ch1_energy_recent + ch1_energy_prev + ch1_energy_prev2
+    )
+    corr_positive = np.maximum(corr_total, 0.0)
+    valid_start = max(0, (3 * quarter_len) - 1)
+    smooth_metric_trace = np.zeros_like(corr_positive)
+    smooth_value = 0.0
+    for idx, metric in enumerate(corr_positive):
+        if idx >= valid_start:
+            if SMOOTH_SHIFT == 0:
+                smooth_value = metric
+            else:
+                smooth_value += (metric - smooth_value) / (2 ** SMOOTH_SHIFT)
+        smooth_metric_trace[idx] = smooth_value
+
+    metric_scaled_reference = smooth_metric_trace * float(1 << THRESH_FRAC_BITS)
+    energy_scaled_trace = energy_total * float(THRESH_VALUE)
+
     expected_flag_index = minn_reference(
         ch0_i.astype(np.float64),
         ch0_q.astype(np.float64),
@@ -334,22 +369,35 @@ async def minn_detector_flags_expected_sample(dut):
         )
     if ax_metric is not None:
         metric_dbg_samples = np.asarray(metric_dbg_trace, dtype=np.int64)
+        scale_factor = float(1 << THRESH_FRAC_BITS)
         if metric_dbg_samples.size:
-            metric_scale = np.max(metric_dbg_samples)
-            if metric_scale > 0:
-                metric_norm = metric_dbg_samples / metric_scale
-            else:
-                metric_norm = metric_dbg_samples
+            metric_dbg_scaled = metric_dbg_samples.astype(np.float64) * scale_factor
             ax_metric.plot(
                 driven_indices,
-                metric_norm,
+                metric_dbg_scaled,
                 color="tab:orange",
                 linewidth=1.0,
-                label="metric_dbg (norm)",
+                label=f"metric_dbg × 2^{THRESH_FRAC_BITS}",
             )
-        ax_metric.set_ylabel("Normalized metric_dbg")
+        ax_metric.plot(
+            driven_indices,
+            metric_scaled_reference,
+            color="tab:blue",
+            linestyle="--",
+            linewidth=1.0,
+            label="Smooth metric × 2^{THRESH_FRAC_BITS}",
+        )
+        ax_metric.plot(
+            driven_indices,
+            energy_scaled_trace,
+            color="tab:green",
+            linestyle=":",
+            linewidth=1.0,
+            label="Energy × THRESH_VALUE",
+        )
+        ax_metric.set_ylabel("Scaled metric (fixed-point units)")
         ax_metric.set_xlabel("Sample")
-        ax_metric.set_ylim(-0.05, 1.05)
+        ax_metric.set_ylim(bottom=0.0)
     else:
         ax_signal.set_xlabel("Sample")
 

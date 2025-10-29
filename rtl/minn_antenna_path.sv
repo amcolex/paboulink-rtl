@@ -1,5 +1,3 @@
-`default_nettype none
-
 module minn_antenna_path #(
     parameter int INPUT_WIDTH   = 12,
     parameter int QUARTER_LEN   = 512,
