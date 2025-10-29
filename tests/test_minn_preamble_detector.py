@@ -33,6 +33,9 @@ SMOOTH_SHIFT = 3
 HYSTERESIS = 2
 TIMING_OFFSET = 0
 OUTPUT_MARGIN = CP_LEN
+LEADING_GUARD_LEN = 256
+TRAILING_GUARD_LEN = NFFT + OUTPUT_MARGIN
+AWGN_SNR_DB = 10.0
 
 
 def running_sum(values: np.ndarray, window: int) -> np.ndarray:
@@ -135,7 +138,7 @@ def minn_reference(
     raise RuntimeError("Reference detector did not trigger")
 
 
-def quantize_samples(samples: np.ndarray, width: int) -> Tuple[np.ndarray, np.ndarray]:
+def quantize_samples(samples: np.ndarray, width: int) -> Tuple[np.ndarray, np.ndarray, float]:
     min_val = -(1 << (width - 1))
     max_val = (1 << (width - 1)) - 1
     max_mag = np.max(np.abs(samples))
@@ -143,9 +146,23 @@ def quantize_samples(samples: np.ndarray, width: int) -> Tuple[np.ndarray, np.nd
         scale = 1.0
     else:
         scale = (max_val - 1) / max_mag
-    real = np.clip(np.round(samples.real * scale), min_val, max_val).astype(np.int32)
-    imag = np.clip(np.round(samples.imag * scale), min_val, max_val).astype(np.int32)
-    return real, imag
+    scaled = samples * scale
+    real = np.clip(np.round(scaled.real), min_val, max_val).astype(np.int32)
+    imag = np.clip(np.round(scaled.imag), min_val, max_val).astype(np.int32)
+    return real, imag, scale
+
+
+def add_awgn(samples: np.ndarray, snr_db: float, rng: np.random.Generator | None = None) -> np.ndarray:
+    base = np.asarray(samples, dtype=np.complex128)
+    if rng is None:
+        rng = np.random.default_rng()
+    signal_power = np.mean(np.abs(base) ** 2)
+    if signal_power <= 0.0:
+        return base.copy()
+    noise_power = signal_power / (10.0 ** (snr_db / 10.0))
+    noise_sigma = np.sqrt(noise_power / 2.0)
+    noise = rng.normal(0.0, noise_sigma, base.shape) + 1j * rng.normal(0.0, noise_sigma, base.shape)
+    return base + noise
 
 
 @cocotb.test()
@@ -168,12 +185,19 @@ async def minn_detector_flags_expected_sample(dut):
     params = OFDMParameters(n_fft=NFFT, cp_len=CP_LEN)
     preamble, _ = generate_preamble(params=params)
     data_symbol, _ = generate_qpsk_symbol(params=params)
-    guard_len = 256
-    guard = np.zeros(guard_len, dtype=np.complex128)
-    frame = np.concatenate((guard, preamble, data_symbol, guard))
+    preamble_len = preamble.size
+    data_len = data_symbol.size
+    leading_guard = np.zeros(LEADING_GUARD_LEN, dtype=np.complex128)
+    trailing_guard = np.zeros(TRAILING_GUARD_LEN, dtype=np.complex128)
+    base_signal = np.concatenate((preamble, data_symbol))
+    full_signal = np.concatenate((leading_guard, base_signal, trailing_guard))
 
-    ch0_i, ch0_q = quantize_samples(frame, INPUT_WIDTH)
-    ch1_i, ch1_q = quantize_samples(frame, INPUT_WIDTH)
+    rng = np.random.default_rng(0)
+    noisy_ch0 = add_awgn(full_signal, AWGN_SNR_DB, rng=rng)
+    noisy_ch1 = add_awgn(full_signal, AWGN_SNR_DB, rng=rng)
+
+    ch0_i, ch0_q, _ = quantize_samples(noisy_ch0, INPUT_WIDTH)
+    ch1_i, ch1_q, _ = quantize_samples(noisy_ch1, INPUT_WIDTH)
 
     expected_flag_index = minn_reference(
         ch0_i.astype(np.float64),
@@ -188,10 +212,7 @@ async def minn_detector_flags_expected_sample(dut):
         timing_offset=TIMING_OFFSET,
     )
 
-    flush_samples = NFFT + OUTPUT_MARGIN
-    total_samples: Iterable[Tuple[int, int, int, int]] = list(zip(ch0_i, ch0_q, ch1_i, ch1_q)) + [
-        (0, 0, 0, 0)
-    ] * flush_samples
+    total_samples: Iterable[Tuple[int, int, int, int]] = list(zip(ch0_i, ch0_q, ch1_i, ch1_q))
 
     metric_dbg_available = hasattr(dut, "metric_dbg")
 
@@ -252,15 +273,41 @@ async def minn_detector_flags_expected_sample(dut):
     ax_signal.set_title("Quantized Input Signal w/ Detector Flag")
     ax_signal.set_ylabel("Amplitude (LSBs)")
     ax_signal.set_xlabel("Sample")
-    frame_samples = len(ch0_i)
-    if len(input_ch0_i_trace) > frame_samples:
+    total_len = len(input_ch0_i_trace)
+    preamble_start = LEADING_GUARD_LEN
+    preamble_end = preamble_start + preamble_len
+    data_start = preamble_end
+    data_end = data_start + data_len
+    if LEADING_GUARD_LEN > 0:
         ax_signal.axvspan(
-            frame_samples,
-            len(input_ch0_i_trace) - 1,
+            0,
+            LEADING_GUARD_LEN,
             color="0.9",
-            alpha=0.3,
-            label="Flush samples",
+            alpha=0.25,
+            label="Leading guard",
         )
+    if TRAILING_GUARD_LEN > 0 and total_len >= TRAILING_GUARD_LEN:
+        ax_signal.axvspan(
+            total_len - TRAILING_GUARD_LEN,
+            total_len,
+            color="0.85",
+            alpha=0.25,
+            label="Trailing guard",
+        )
+    ax_signal.axvspan(
+        preamble_start,
+        preamble_end,
+        color="tab:blue",
+        alpha=0.12,
+        label="Preamble window",
+    )
+    ax_signal.axvspan(
+        data_start,
+        data_end,
+        color="tab:green",
+        alpha=0.08,
+        label="Data symbol",
+    )
     ax_flag = ax_signal.twinx()
     if output_indices:
         ax_flag.step(
