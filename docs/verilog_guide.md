@@ -1,43 +1,10 @@
 # Verilog Coding Standard
 
-from [FPGA Design Elements](https://fpgacpu.ca/fpga/index.html) by [Charles Eric LaForest, PhD.](https://fpgacpu.ca/)
-
-_This is a continually evolving document. Please send any_
-_feedback to [eric@fpgacpu.ca](mailto:eric@fpgacpu.ca?subject=Verilog%20Coding%20Standard) or [@elaforest](https://twitter.com/elaforest) or join the [Discord server](https://discordapp.com/invite/bWBdwVD)._
-
-Over time, I've found that most of the difficulty with Verilog is a problem
-with programming practice which goes away with a certain coding style, which I
-describe here. It's not perfect, but it works and makes Verilog programming
-easier, more pleasant, and more reliable.
-
-It matters to have a Verilog coding standard, because Verilog _doesn't_
-_matter_. We want to quickly get past the nuts-and-bolts of Verilog itself
-so we can focus on the system we are trying to build. I describe the related
-system design practice in the companion [System Design\\
-Standard](https://fpgacpu.ca/fpga/system.html).
-
 ## Scope
 
 This standard was written with FPGAs in mind so some details may not apply,
 or may be missing, in relation to ASICs. Nonetheless, the standard should still
 largely be applicable to ASIC design.
-
-This standard mainly defines a restricted form of Verilog which uses a
-limited number of programming idioms. These restrictions reduce bugs, make the
-code easier to understand, and aim to give consistent synthesis results across
-CAD tools, whether the code is manually written or machine-generated.
-
-This standard _does not_ define any typesetting conventions such as
-brace style, indentation, variable naming, comment format, etc... You will see
-code examples typeset in a style I recommend, but it is not essential. Like
-regular written language prose, anything that helps readability is good.
-
-Nor does this standard define any testing, simulation, verification, or
-validation methodologies (though I hope you have some!). However, it will
-address some pitfalls and low-level details.
-
-Finally, this standard assumes you are already familiar with Verilog and
-digital design in general. It is not a language or tool reference.
 
 ## Verilog Language Versions
 
@@ -45,17 +12,6 @@ Use Verilog-2001, specifically its synthesizable subset, as it's well
 supported across CAD tools. Anything not synthesizable is for
 simulation/verification and outside the scope of this standard.
 
-The previous version, Verilog-1995, lacks several useful features (named
-port connections, vector part select, generate blocks, etc...) without which
-your code will get longer and more difficult. Avoid mixing Verilog-1995 forms
-into Verilog-2001 code, despite the backwards compatibility.
-
-The following version, SystemVerilog, brings in too many features and thus
-has uneven support across CAD tools. It does have desirable features
-(interfaces, parameterizable port instances, structs, enums, etc...), but until
-support matures and a similarly restricted, synthesizable subset can be agreed
-upon, it should be avoided or used for simulation/verification (which it is
-well suited for!).
 
 ## Definitions and Inclusions
 
