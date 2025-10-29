@@ -149,33 +149,46 @@ def generate_preamble(
     include_cp: bool = True,
     normalize: bool = True,
     subcarrier_values: np.ndarray | None = None,
-    subcarrier_value: complex = 1.0 + 0.0j,
+    subcarrier_value: complex | None = None,
+    rng: np.random.Generator | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Create a preamble symbol shaped as [A A -A -A] in the time domain.
 
-    The implementation uses every fourth subcarrier (spacing=4), then flips the
-    sign of the second half of the time-domain symbol to create the requested
-    pattern. Returns (time_domain_symbol, active_subcarrier_values) where the
-    time-domain vector already includes the cyclic prefix if `include_cp` is True.
+    The implementation activates every fourth subcarrier from the standard
+    allocation, then flips the sign of the second half of the time-domain symbol
+    to create the requested pattern. Returns (time_domain_symbol,
+    active_subcarrier_values) where the time-domain vector already includes the
+    cyclic prefix if `include_cp` is True.
     """
     params = OFDMParameters() if params is None else params
     if params.n_fft % 4:
         raise ValueError("Preamble generation requires an FFT length divisible by 4.")
-    quarter_active = params.num_active // 4
-    if quarter_active == 0:
+    all_indices = centered_subcarrier_indices(params.num_active)
+    quarter_indices = all_indices[(all_indices % 4) == 0]
+    if quarter_indices.size == 0:
         raise ValueError("Not enough active subcarriers to build a quarter-band preamble.")
 
     if subcarrier_values is None:
-        values = np.full(quarter_active, subcarrier_value, dtype=np.complex128)
+        if subcarrier_value is not None:
+            values = np.full(quarter_indices.size, subcarrier_value, dtype=np.complex128)
+            # Enforce Hermitian symmetry to keep the time-domain preamble real when possible.
+            pos_mask = quarter_indices > 0
+            values[quarter_indices < 0] = np.conj(values[pos_mask][::-1])
+        else:
+            rng = np.random.default_rng(0) if rng is None else rng
+            pos_mask = quarter_indices > 0
+            pos_values = rng.choice([-1.0, 1.0], size=pos_mask.sum()).astype(np.complex128)
+            values = np.zeros(quarter_indices.size, dtype=np.complex128)
+            values[pos_mask] = pos_values
+            values[~pos_mask] = np.conj(pos_values[::-1])
     else:
         values = np.asarray(subcarrier_values, dtype=np.complex128)
-        if values.shape[0] != quarter_active:
+        if values.shape[0] != quarter_indices.size:
             raise ValueError(
-                f"Expected {quarter_active} subcarrier values, got {values.shape[0]} instead."
+                f"Expected {quarter_indices.size} subcarrier values, got {values.shape[0]} instead."
             )
 
-    indices = centered_subcarrier_indices(values.size, spacing=4)
-    spectrum = allocate_subcarriers(params.n_fft, indices, values)
+    spectrum = allocate_subcarriers(params.n_fft, quarter_indices, values)
     base_symbol = spectrum_to_time_domain(spectrum, normalize=normalize)
 
     # Flip the sign on the second half of the time-domain symbol.
@@ -229,3 +242,93 @@ def generate_frame(
     if not symbols:
         return np.array([], dtype=np.complex128)
     return np.concatenate(symbols)
+
+
+def _plot_frame(frame: np.ndarray, *, title: str | None = None, output: str | None = None) -> None:
+    """Render the provided complex baseband frame as I/Q and magnitude."""
+    import matplotlib.pyplot as plt
+
+    indices = np.arange(frame.size)
+    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+
+    axes[0].plot(indices, frame.real, label="In-phase (I)")
+    axes[0].plot(indices, frame.imag, label="Quadrature (Q)")
+    axes[0].set_ylabel("Amplitude (arb)")
+    axes[0].set_title(title or "OFDM Frame Time Series")
+    axes[0].legend(loc="upper right")
+
+    axes[1].plot(indices, np.abs(frame), label="Magnitude", color="tab:purple")
+    axes[1].set_xlabel("Sample")
+    axes[1].set_ylabel("|IQ|")
+    axes[1].legend(loc="upper right")
+
+    fig.tight_layout()
+    if output:
+        plt.savefig(output, dpi=150)
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+def _build_demo_frame(
+    *,
+    params: OFDMParameters,
+    include_cp: bool,
+    normalize: bool,
+) -> np.ndarray:
+    preamble, _ = generate_preamble(params=params, include_cp=include_cp, normalize=normalize)
+    data_symbol, _ = generate_qpsk_symbol(
+        params=params, include_cp=include_cp, normalize=normalize
+    )
+    return np.concatenate((preamble, data_symbol))
+
+
+def _main() -> None:
+    import argparse
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description="Plot a generated OFDM frame.")
+    parser.add_argument(
+        "--nfft",
+        type=int,
+        default=N_FFT,
+        help="FFT length used for frame generation (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--cp",
+        type=int,
+        default=CYCLIC_PREFIX,
+        help="Cyclic prefix length (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--no-cp",
+        dest="include_cp",
+        action="store_false",
+        help="Exclude the cyclic prefix from generated symbols.",
+    )
+    parser.add_argument(
+        "--no-normalize",
+        dest="normalize",
+        action="store_false",
+        help="Disable power normalization for generated symbols.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Path to write PNG output instead of showing an interactive window.",
+    )
+    args = parser.parse_args()
+
+    params = OFDMParameters(n_fft=args.nfft, cp_len=args.cp)
+    frame = _build_demo_frame(params=params, include_cp=args.include_cp, normalize=args.normalize)
+
+    title = (
+        f"OFDM Frame (nfft={params.n_fft}, cp_len={params.cp_len}, normalize={args.normalize})"
+    )
+    output_path = Path(args.output).expanduser() if args.output else None
+    _plot_frame(frame, title=title, output=str(output_path) if output_path else None)
+
+
+if __name__ == "__main__":
+    _main()
