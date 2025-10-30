@@ -4,11 +4,11 @@ module minn_preamble_detector #(
     parameter int NFFT              = 2048,
     parameter int CP_LEN            = 512,
     parameter int OUTPUT_MARGIN     = CP_LEN,
-    parameter int THRESH_VALUE      = 16'd4096,
+    parameter int THRESH_VALUE      = 32'd4096,
     parameter int THRESH_FRAC_BITS  = 15,
     parameter int SMOOTH_SHIFT      = 3,
     parameter int HYSTERESIS        = 2,
-    parameter int TIMING_OFFSET     = 0,
+    parameter int TIMING_OFFSET     = -CP_LEN,
     parameter int METRIC_DBG_WIDTH  = 24
 ) (
     input  logic                          clk,
@@ -56,6 +56,11 @@ module minn_preamble_detector #(
         : HYST_WIDTH'(HYSTERESIS - 1);
     localparam int THRESH_WIDTH = (THRESH_VALUE <= 0) ? 1 : $clog2(THRESH_VALUE + 1);
     localparam logic [THRESH_WIDTH-1:0] THRESH_CONST = THRESH_WIDTH'(THRESH_VALUE);
+    localparam int THRESH_CONST_INT = THRESH_VALUE;
+    localparam bit THRESH_IS_NONZERO = (THRESH_CONST_INT != 0);
+    localparam bit THRESH_IS_POWER_OF_TWO = (THRESH_CONST_INT > 0)
+        && ((THRESH_CONST_INT & (THRESH_CONST_INT - 1)) == 0);
+    localparam int THRESH_SHIFT = THRESH_IS_POWER_OF_TWO ? $clog2(THRESH_CONST_INT) : 0;
     localparam int CORR_SCALED_WIDTH = CORR_TOTAL_WIDTH + THRESH_FRAC_BITS;
     localparam int ENERGY_SCALED_WIDTH = ENERGY_TOTAL_WIDTH + THRESH_WIDTH;
     localparam int COMP_WIDTH = (CORR_SCALED_WIDTH > ENERGY_SCALED_WIDTH)
@@ -79,11 +84,50 @@ module minn_preamble_detector #(
 
     (* ram_style = "block" *)
     logic [ENTRY_WIDTH-1:0] sample_mem [0:OUTPUT_DEPTH-1];
-    logic [OUTPUT_DEPTH-1:0] flag_mem;
+
+    localparam int DET_QUEUE_DEPTH = 4;
+    localparam int DET_QUEUE_ADDR_WIDTH = (DET_QUEUE_DEPTH <= 1) ? 1 : $clog2(DET_QUEUE_DEPTH);
+    localparam int DET_TIMER_WIDTH = OUT_ADDR_WIDTH + 2;
+    localparam logic [DET_QUEUE_ADDR_WIDTH:0] DET_QUEUE_DEPTH_COUNT =
+        (DET_QUEUE_ADDR_WIDTH+1)'(DET_QUEUE_DEPTH);
+
+    logic [DET_QUEUE_ADDR_WIDTH-1:0] detect_wr_ptr;
+    logic [DET_QUEUE_ADDR_WIDTH-1:0] detect_rd_ptr;
+    logic [DET_QUEUE_ADDR_WIDTH:0]   detect_count;
+    logic [DET_TIMER_WIDTH-1:0]      detect_queue [0:DET_QUEUE_DEPTH-1];
 
     logic [OUT_ADDR_WIDTH-1:0] write_ptr;
     logic [OUT_ADDR_WIDTH-1:0] read_ptr;
     logic [OUT_ADDR_WIDTH:0]   sample_count;
+    logic [OUT_ADDR_WIDTH-1:0] read_ptr_plus1;
+    logic                      produce_output;
+    logic [OUT_ADDR_WIDTH-1:0] read_ptr_future;
+    logic [OUT_ADDR_WIDTH:0]   sample_count_incremented;
+    logic [OUT_ADDR_WIDTH:0]   sample_count_future;
+    logic [OUT_ADDR_WIDTH:0]   sample_gap_raw;
+    logic [DET_TIMER_WIDTH-1:0] fill_gap;
+    logic                      queue_has_entries;
+    logic [DET_TIMER_WIDTH-1:0] detect_front;
+    logic                      pop_event_req;
+    logic                      dec_event_req;
+    logic                      push_event_req;
+
+    assign read_ptr_plus1 = (read_ptr == READ_WRAP) ? '0 : read_ptr + 1'b1;
+    assign produce_output = in_valid && (sample_count >= OUTPUT_DELAY_COUNT);
+    assign read_ptr_future = produce_output ? read_ptr_plus1 : read_ptr;
+    assign sample_count_incremented = (sample_count < OUTPUT_DEPTH_COUNT)
+        ? sample_count + 1'b1
+        : sample_count;
+    assign sample_count_future = in_valid ? sample_count_incremented : sample_count;
+    assign sample_gap_raw = (sample_count_future >= OUTPUT_DELAY_COUNT)
+        ? '0
+        : OUTPUT_DELAY_COUNT - sample_count_future;
+    assign fill_gap = {{(DET_TIMER_WIDTH-(OUT_ADDR_WIDTH+1)){1'b0}}, sample_gap_raw};
+    assign queue_has_entries = (detect_count != {(DET_QUEUE_ADDR_WIDTH+1){1'b0}});
+    assign detect_front = detect_queue[detect_rd_ptr];
+    assign pop_event_req = produce_output && queue_has_entries && (detect_front == {DET_TIMER_WIDTH{1'b0}});
+    assign dec_event_req = produce_output && queue_has_entries && (detect_front != {DET_TIMER_WIDTH{1'b0}});
+    assign push_event_req = detection_pulse && (detect_count < DET_QUEUE_DEPTH_COUNT);
 
     // Antenna processing paths.
     logic signed [CORR_WIDTH-1:0]  ch0_corr_recent;
@@ -199,12 +243,22 @@ module minn_preamble_detector #(
     // Threshold comparison via cross multiplication.
     logic [CORR_SCALED_WIDTH-1:0] corr_scaled_native;
     logic [ENERGY_SCALED_WIDTH-1:0] energy_scaled_native;
+    logic [ENERGY_SCALED_WIDTH-1:0] energy_total_ext;
     logic [COMP_WIDTH-1:0] corr_scaled;
     logic [COMP_WIDTH-1:0] energy_scaled;
     logic above_threshold;
 
     assign corr_scaled_native = {smooth_metric, {THRESH_FRAC_BITS{1'b0}}};
-    assign energy_scaled_native = energy_total * THRESH_CONST;
+    assign energy_total_ext = {{(ENERGY_SCALED_WIDTH-ENERGY_TOTAL_WIDTH){1'b0}}, energy_total};
+    generate
+        if (!THRESH_IS_NONZERO) begin : g_zero_threshold
+            assign energy_scaled_native = '0;
+        end else if (THRESH_IS_POWER_OF_TWO) begin : g_power_of_two_threshold
+            assign energy_scaled_native = energy_total_ext << THRESH_SHIFT;
+        end else begin : g_generic_threshold
+            assign energy_scaled_native = energy_total * THRESH_CONST;
+        end
+    endgenerate
     assign corr_scaled = {{(COMP_WIDTH-CORR_SCALED_WIDTH){1'b0}}, corr_scaled_native};
     assign energy_scaled = {{(COMP_WIDTH-ENERGY_SCALED_WIDTH){1'b0}}, energy_scaled_native};
     assign above_threshold = metric_valid && (corr_scaled >= energy_scaled);
@@ -280,6 +334,23 @@ module minn_preamble_detector #(
         end
     endfunction
 
+    function automatic logic [DET_TIMER_WIDTH-1:0] ring_distance(
+        input logic [OUT_ADDR_WIDTH-1:0] target,
+        input logic [OUT_ADDR_WIDTH-1:0] origin
+    );
+        logic [DET_TIMER_WIDTH-1:0] target_ext;
+        logic [DET_TIMER_WIDTH-1:0] origin_ext;
+        begin
+            target_ext = DET_TIMER_WIDTH'({1'b0, target});
+            origin_ext = DET_TIMER_WIDTH'({1'b0, origin});
+            if (target >= origin) begin
+                ring_distance = target_ext - origin_ext;
+            end else begin
+                ring_distance = target_ext + DET_TIMER_WIDTH'(OUTPUT_DEPTH) - origin_ext;
+            end
+        end
+    endfunction
+
 `ifdef MINN_METRIC_DEBUG
     function automatic logic [METRIC_DBG_WIDTH-1:0] metric_trunc(
         input logic [CORR_TOTAL_WIDTH-1:0] value
@@ -303,18 +374,23 @@ module minn_preamble_detector #(
     // Output buffer management.
     always_ff @(posedge clk) begin
         if (rst) begin
-            write_ptr    <= '0;
-            read_ptr     <= '0;
-            sample_count <= '0;
-            out_valid    <= 1'b0;
-            out_ch0_i    <= '0;
-            out_ch0_q    <= '0;
-            out_ch1_i    <= '0;
-            out_ch1_q    <= '0;
-            frame_start  <= 1'b0;
-            flag_mem     <= '0;
+            write_ptr     <= '0;
+            read_ptr      <= '0;
+            sample_count  <= '0;
+            out_valid     <= 1'b0;
+            out_ch0_i     <= '0;
+            out_ch0_q     <= '0;
+            out_ch1_i     <= '0;
+            out_ch1_q     <= '0;
+            frame_start   <= 1'b0;
+            detect_wr_ptr <= '0;
+            detect_rd_ptr <= '0;
+            detect_count  <= '0;
+            for (int q = 0; q < DET_QUEUE_DEPTH; q++) begin
+                detect_queue[q] <= '0;
+            end
 `ifdef MINN_METRIC_DEBUG
-            metric_dbg   <= '0;
+            metric_dbg    <= '0;
 `endif
         end else begin
             out_valid   <= 1'b0;
@@ -327,7 +403,6 @@ module minn_preamble_detector #(
                     in_ch0_q,
                     in_ch0_i
                 };
-                flag_mem[write_ptr] <= 1'b0;
 
                 if (write_ptr == WRITE_WRAP) begin
                     write_ptr <= '0;
@@ -345,25 +420,35 @@ module minn_preamble_detector #(
                     out_ch0_q <= sample_mem[read_ptr][CH0_Q_LSB +: INPUT_WIDTH];
                     out_ch1_i <= sample_mem[read_ptr][CH1_I_LSB +: INPUT_WIDTH];
                     out_ch1_q <= sample_mem[read_ptr][CH1_Q_LSB +: INPUT_WIDTH];
-                    frame_start <= flag_mem[read_ptr];
-
-                    if (read_ptr == READ_WRAP) begin
-                        read_ptr <= '0;
-                    end else begin
-                        read_ptr <= read_ptr + 1'b1;
-                    end
-                end else begin
-                    out_valid   <= 1'b0;
-                    frame_start <= 1'b0;
+                    read_ptr  <= read_ptr_plus1;
                 end
-            end else begin
-                out_valid   <= 1'b0;
-                frame_start <= 1'b0;
             end
 
-            if (detection_pulse) begin
-                flag_mem[detection_addr] <= 1'b1;
+            if (dec_event_req) begin
+                detect_queue[detect_rd_ptr] <= detect_front - 1'b1;
             end
+
+            if (pop_event_req) begin
+                frame_start <= 1'b1;
+                if (detect_rd_ptr == DET_QUEUE_ADDR_WIDTH'(DET_QUEUE_DEPTH-1)) begin
+                    detect_rd_ptr <= '0;
+                end else begin
+                    detect_rd_ptr <= detect_rd_ptr + 1'b1;
+                end
+            end
+
+            if (push_event_req) begin
+                detect_queue[detect_wr_ptr] <= ring_distance(detection_addr, read_ptr_future) + fill_gap;
+                if (detect_wr_ptr == DET_QUEUE_ADDR_WIDTH'(DET_QUEUE_DEPTH-1)) begin
+                    detect_wr_ptr <= '0;
+                end else begin
+                    detect_wr_ptr <= detect_wr_ptr + 1'b1;
+                end
+            end
+
+            detect_count <= detect_count
+                + (push_event_req ? {{DET_QUEUE_ADDR_WIDTH{1'b0}}, 1'b1} : '0)
+                - (pop_event_req  ? {{DET_QUEUE_ADDR_WIDTH{1'b0}}, 1'b1} : '0);
 
 `ifdef MINN_METRIC_DEBUG
             if (metric_valid) begin
