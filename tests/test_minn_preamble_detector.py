@@ -20,7 +20,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from ofdm import OFDMParameters, generate_preamble, generate_qpsk_symbol
+from tests.utils.ofdm import OFDMParameters, generate_preamble, generate_qpsk_symbol
 
 VERILATOR = shutil.which("verilator")
 
