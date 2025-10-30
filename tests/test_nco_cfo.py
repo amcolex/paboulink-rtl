@@ -853,7 +853,7 @@ def test_nco_cfo_compensator():
     rtl_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "rtl"))
     rtl_file = os.path.join(rtl_dir, "nco_cfo_compensator.sv")
     build_dir = os.path.join("tests", "sim_build", "nco_cfo_compensator")
-    vcd_dir = Path(__file__).resolve().parents[1] / "vcd" / "nco_cfo_compensator"
+    vcd_dir = Path(__file__).resolve().parent / "vcd" / "nco_cfo_compensator"
     vcd_dir.mkdir(parents=True, exist_ok=True)
     vcd_path = vcd_dir / "nco_cfo_compensator.vcd"
     vcd_path.unlink(missing_ok=True)
