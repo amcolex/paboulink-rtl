@@ -182,6 +182,7 @@ async def minn_detector_flags_expected_sample(dut):
     dut.rst.value = 1
     dut.s_axis_tvalid.value = 0
     dut.s_axis_tdata.value = 0
+    dut.s_axis_tuser.value = 0
     dut.s_axis_tlast.value = 0
     dut.m_axis_tready.value = 1
 
@@ -277,12 +278,13 @@ async def minn_detector_flags_expected_sample(dut):
 
         dut.s_axis_tdata.value = _pack_axis_samples(ch0_i_int, ch0_q_int, ch1_i_int, ch1_q_int)
         dut.s_axis_tvalid.value = 1
+        dut.s_axis_tuser.value = 0
         dut.s_axis_tlast.value = 0
 
         while True:
             await RisingEdge(dut.clk)
             if dut.m_axis_tvalid.value.integer:
-                frame_start_int = dut.frame_start.value.integer
+                frame_start_int = dut.m_axis_tuser.value.integer & 0x1
                 output_indices.append(out_index)
                 frame_start_trace.append(frame_start_int)
                 if frame_start_int:
@@ -294,6 +296,7 @@ async def minn_detector_flags_expected_sample(dut):
         dut.s_axis_tvalid.value = 0
         dut.s_axis_tlast.value = 0
         dut.s_axis_tdata.value = 0
+        dut.s_axis_tuser.value = 0
 
         if metric_dbg_available:
             metric_dbg_trace.append(int(dut.metric_dbg.value))
@@ -303,7 +306,7 @@ async def minn_detector_flags_expected_sample(dut):
     for _ in range(5):
         await RisingEdge(dut.clk)
         if dut.m_axis_tvalid.value.integer:
-            frame_start_int = dut.frame_start.value.integer
+            frame_start_int = dut.m_axis_tuser.value.integer & 0x1
             output_indices.append(out_index)
             frame_start_trace.append(frame_start_int)
             if frame_start_int:
@@ -443,7 +446,7 @@ async def minn_detector_flags_expected_sample(dut):
     plt.close(fig)
     dut._log.info(f"Saved Minn preamble detector plot to {plot_path}")
 
-    assert flagged_indices, "Detector did not assert frame_start"
+    assert flagged_indices, "Detector did not assert the start-of-frame flag"
     observed_index = flagged_indices[0]
     assert abs(observed_index - expected_flag_index) <= 16, (
         f"Expected first frame_start near index {expected_flag_index}, "

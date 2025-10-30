@@ -8,6 +8,7 @@
 module minn_preamble_detector #(
     parameter int INPUT_WIDTH       = 12,
     parameter int AXIS_DATA_WIDTH   = INPUT_WIDTH * 4,
+    parameter int AXIS_TUSER_WIDTH  = 1,
     parameter int NFFT              = 2048,
     parameter int CP_LEN            = 512,
     parameter int OUTPUT_MARGIN     = CP_LEN,
@@ -22,16 +23,16 @@ module minn_preamble_detector #(
     input  logic                        rst,
     // AXI4-Stream input (packed as {ch1_q, ch1_i, ch0_q, ch0_i})
     input  logic [AXIS_DATA_WIDTH-1:0] s_axis_tdata,
+    input  logic [AXIS_TUSER_WIDTH-1:0] s_axis_tuser,
     input  logic                       s_axis_tvalid,
     output logic                       s_axis_tready,
     input  logic                       s_axis_tlast,
     // AXI4-Stream output (packed as {ch1_q, ch1_i, ch0_q, ch0_i})
     output logic [AXIS_DATA_WIDTH-1:0] m_axis_tdata,
+    output logic [AXIS_TUSER_WIDTH-1:0] m_axis_tuser,
     output logic                       m_axis_tvalid,
     input  logic                       m_axis_tready,
-    output logic                       m_axis_tlast,
-    // Frame start indicator aligned with output handshake
-    output logic                       frame_start
+    output logic                       m_axis_tlast
 `ifdef DEBUG
    ,output logic [METRIC_DBG_WIDTH-1:0] metric_dbg
 `endif
@@ -49,6 +50,9 @@ module minn_preamble_detector #(
         end
         if (AXIS_DATA_WIDTH != (INPUT_WIDTH * 4)) begin
             $error("AXIS_DATA_WIDTH must equal 4 * INPUT_WIDTH for dual-antenna Minn detector.");
+        end
+        if (AXIS_TUSER_WIDTH < 1) begin
+            $error("AXIS_TUSER_WIDTH must be at least 1 to carry the frame start flag.");
         end
     end
 
@@ -103,6 +107,7 @@ module minn_preamble_detector #(
     (* ram_style = "block" *)
     logic [ENTRY_WIDTH-1:0] sample_mem [0:OUTPUT_DEPTH-1];
     logic                   sample_last_mem [0:OUTPUT_DEPTH-1];
+    logic [AXIS_TUSER_WIDTH-1:0] sample_user_mem [0:OUTPUT_DEPTH-1];
 
     // Detection queue configuration
     localparam int DET_QUEUE_DEPTH = 4;
@@ -142,11 +147,13 @@ module minn_preamble_detector #(
     logic signed [INPUT_WIDTH-1:0] in_ch1_i;
     logic signed [INPUT_WIDTH-1:0] in_ch1_q;
     logic [AXIS_DATA_WIDTH-1:0]    output_data_reg;
+    logic [AXIS_TUSER_WIDTH-1:0]   output_user_reg;
     logic                          output_valid_reg;
     logic                          output_last_reg;
-    logic                          frame_start_pending;
     logic                          output_fire;
     logic                          load_output;
+    logic [AXIS_TUSER_WIDTH-1:0]   s_axis_tuser_sanitized;
+    logic [AXIS_TUSER_WIDTH-1:0]   frame_start_mask;
 
     assign sample_accept = s_axis_tvalid && s_axis_tready;
     assign in_ch0_i = $signed(s_axis_tdata[CH0_I_LSB +: INPUT_WIDTH]);
@@ -154,6 +161,7 @@ module minn_preamble_detector #(
     assign in_ch1_i = $signed(s_axis_tdata[CH1_I_LSB +: INPUT_WIDTH]);
     assign in_ch1_q = $signed(s_axis_tdata[CH1_Q_LSB +: INPUT_WIDTH]);
     assign m_axis_tdata  = output_data_reg;
+    assign m_axis_tuser  = output_user_reg;
     assign m_axis_tvalid = output_valid_reg;
     assign m_axis_tlast  = output_last_reg;
     assign output_fire   = output_valid_reg && m_axis_tready;
@@ -172,12 +180,18 @@ module minn_preamble_detector #(
         : OUTPUT_DELAY_COUNT - sample_count_future;
     assign fill_gap = {{(DET_TIMER_WIDTH-(OUT_ADDR_WIDTH+1)){1'b0}}, sample_gap_raw};
     assign s_axis_tready = (!output_valid_reg) || m_axis_tready;
-    assign frame_start = output_fire && frame_start_pending;
     assign queue_has_entries = (detect_count != {(DET_QUEUE_ADDR_WIDTH+1){1'b0}});
     assign detect_front = detect_queue[detect_rd_ptr];
     assign pop_event_req = produce_output && queue_has_entries && (detect_front == {DET_TIMER_WIDTH{1'b0}});
     assign dec_event_req = produce_output && queue_has_entries && (detect_front != {DET_TIMER_WIDTH{1'b0}});
     assign push_event_req = detection_pulse && (detect_count < DET_QUEUE_DEPTH_COUNT);
+
+    always_comb begin
+        s_axis_tuser_sanitized = s_axis_tuser;
+        s_axis_tuser_sanitized[0] = 1'b0;
+        frame_start_mask = '0;
+        frame_start_mask[0] = pop_event_req;
+    end
 
     // -------------------------------------------------------------------------
     // Antenna processing paths
@@ -448,9 +462,9 @@ module minn_preamble_detector #(
             read_ptr            <= '0;
             sample_count        <= '0;
             output_data_reg     <= '0;
+            output_user_reg     <= '0;
             output_last_reg     <= 1'b0;
             output_valid_reg    <= 1'b0;
-            frame_start_pending <= 1'b0;
             detect_wr_ptr       <= '0;
             detect_rd_ptr       <= '0;
             detect_count        <= '0;
@@ -467,21 +481,18 @@ module minn_preamble_detector #(
             if (load_output) begin
                 output_valid_reg    <= 1'b1;
                 output_data_reg     <= sample_mem[read_ptr];
+                output_user_reg     <= sample_user_mem[read_ptr] | frame_start_mask;
                 output_last_reg     <= sample_last_mem[read_ptr];
                 read_ptr            <= read_ptr_plus1;
             end else if (output_fire) begin
                 output_last_reg <= 1'b0;
-            end
-
-            if (load_output) begin
-                frame_start_pending <= pop_event_req;
-            end else if (output_fire) begin
-                frame_start_pending <= 1'b0;
+                output_user_reg <= '0;
             end
 
             if (sample_accept) begin
                 sample_mem[write_ptr]      <= s_axis_tdata;
                 sample_last_mem[write_ptr] <= s_axis_tlast;
+                sample_user_mem[write_ptr] <= s_axis_tuser_sanitized;
                 if (write_ptr == WRITE_WRAP) begin
                     write_ptr <= '0;
                 end else begin

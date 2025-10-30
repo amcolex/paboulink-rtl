@@ -5,6 +5,7 @@ module nco_cfo_compensator #(
     parameter int WIDTH = 12,
     parameter int NUM_CHANNELS = 2,
     parameter int AXIS_DATA_WIDTH = NUM_CHANNELS * 2 * WIDTH,
+    parameter int AXIS_TUSER_WIDTH = 1,
     parameter int ACC_WIDTH = 32,
     parameter int LUT_ADDR_WIDTH = 8,
     parameter int LUT_DATA_WIDTH = 16
@@ -14,12 +15,14 @@ module nco_cfo_compensator #(
 
     // AXI4-Stream input
     input  logic [AXIS_DATA_WIDTH-1:0]     s_axis_tdata,
+    input  logic [AXIS_TUSER_WIDTH-1:0]    s_axis_tuser,
     input  logic                           s_axis_tvalid,
     output logic                           s_axis_tready,
     input  logic                           s_axis_tlast,
 
     // AXI4-Stream output
     output logic [AXIS_DATA_WIDTH-1:0]     m_axis_tdata,
+    output logic [AXIS_TUSER_WIDTH-1:0]    m_axis_tuser,
     output logic                           m_axis_tvalid,
     input  logic                           m_axis_tready,
     output logic                           m_axis_tlast,
@@ -83,6 +86,7 @@ module nco_cfo_compensator #(
     logic signed [LUT_DATA_WIDTH-1:0] cos_val_latched;
     logic signed [LUT_DATA_WIDTH-1:0] sin_val_latched;
     logic                             tlast_latched;
+    logic [AXIS_TUSER_WIDTH-1:0]      tuser_latched;
 
     logic signed [WIDTH-1:0] sample_i [NUM_CHANNELS];
     logic signed [WIDTH-1:0] sample_q [NUM_CHANNELS];
@@ -231,6 +235,7 @@ module nco_cfo_compensator #(
             m_axis_tvalid <= 1'b0;
             m_axis_tlast  <= 1'b0;
             m_axis_tdata  <= '0;
+            m_axis_tuser  <= '0;
             cos_val_latched <= '0;
             sin_val_latched <= '0;
             real_temp <= '0;
@@ -239,6 +244,7 @@ module nco_cfo_compensator #(
             mult_op_c <= '0;
             mult_op_d <= '0;
             tlast_latched <= 1'b0;
+            tuser_latched <= '0;
             for (int ch = 0; ch < NUM_CHANNELS; ch++) begin
                 sample_i[ch] <= '0;
                 sample_q[ch] <= '0;
@@ -257,6 +263,7 @@ module nco_cfo_compensator #(
                         cos_val_latched <= cos_lut[phase_index];
                         sin_val_latched <= sin_lut[phase_index];
                         tlast_latched   <= s_axis_tlast;
+                        tuser_latched   <= s_axis_tuser;
                         phase_acc_next  <= phase_acc + phase_inc;
                         channel_idx     <= '0;
                         compute_step    <= STEP_PRIME;
@@ -306,6 +313,7 @@ module nco_cfo_compensator #(
 
                 STATE_PACK: begin
                     m_axis_tdata  <= packed_comb;
+                    m_axis_tuser  <= tuser_latched;
                     m_axis_tlast  <= tlast_latched;
                     m_axis_tvalid <= 1'b1;
                     state         <= STATE_OUTPUT;
@@ -314,6 +322,7 @@ module nco_cfo_compensator #(
                 STATE_OUTPUT: begin
                     if (m_axis_tvalid && m_axis_tready) begin
                         m_axis_tvalid <= 1'b0;
+                        m_axis_tuser  <= '0;
                         phase_acc     <= phase_acc_next;
                         state         <= STATE_IDLE;
                     end

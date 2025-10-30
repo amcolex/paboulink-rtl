@@ -26,6 +26,8 @@ LUT_DATA_WIDTH = 16
 FRACTION_BITS = LUT_DATA_WIDTH - 1
 SCALE = (1 << (WIDTH - 1)) - 1
 PHASE_MASK = (1 << ACC_WIDTH) - 1
+TUSER_WIDTH = 4
+TUSER_MASK = (1 << TUSER_WIDTH) - 1
 
 
 def _quantize(value: float) -> int:
@@ -46,6 +48,10 @@ def _signed_from_bits(value: int, width: int) -> int:
     if value & (1 << (width - 1)):
         value -= 1 << width
     return value
+
+
+def _tuser_value(sample_idx: int) -> int:
+    return sample_idx & TUSER_MASK
 
 
 def _generate_luts():
@@ -91,6 +97,7 @@ def _compute_expected_records(iq_records, phase_schedule, phase_start=0):
 
 async def _reset(dut):
     dut.rst_n.value = 0
+    dut.s_axis_tuser.value = 0
     await RisingEdge(dut.clk)
     await RisingEdge(dut.clk)
     dut.rst_n.value = 1
@@ -144,6 +151,7 @@ async def _axi_read(dut, addr: int) -> int:
 async def _capture_stream(dut, expected_samples: int, ready_generator=None):
     received = 0
     output_records = []
+    tuser_trace = []
     if ready_generator is None:
         dut.m_axis_tready.value = 1
     while received < expected_samples:
@@ -152,6 +160,7 @@ async def _capture_stream(dut, expected_samples: int, ready_generator=None):
             dut.m_axis_tready.value = 1 if next(ready_generator) else 0
         if dut.m_axis_tvalid.value and dut.m_axis_tready.value:
             word = int(dut.m_axis_tdata.value)
+            tuser_trace.append(int(dut.m_axis_tuser.value) & TUSER_MASK)
             row = []
             for ch in range(CHANNELS):
                 base = ch * 2 * WIDTH
@@ -173,7 +182,7 @@ async def _capture_stream(dut, expected_samples: int, ready_generator=None):
                     )
                 assert received == expected_samples - 1
             received += 1
-    return output_records
+    return output_records, tuser_trace
 
 
 def _maybe_plot(records_in, records_out, title_prefix: str, real_path: Path, imag_path: Path):
@@ -247,6 +256,7 @@ async def nco_cfo_compensation(dut):
 
     dut.m_axis_tready.value = 1
     dut.s_axis_tvalid.value = 0
+    dut.s_axis_tuser.value = 0
     dut.s_axis_tlast.value = 0
     dut.s_axi_awvalid.value = 0
     dut.s_axi_wvalid.value = 0
@@ -279,6 +289,7 @@ async def nco_cfo_compensation(dut):
         input_records.append([complex(i_vals[ch] / SCALE, q_vals[ch] / SCALE) for ch in range(CHANNELS)])
         dut.s_axis_tdata.value = _pack_samples(i_vals, q_vals)
         dut.s_axis_tvalid.value = 1
+        dut.s_axis_tuser.value = _tuser_value(idx)
         dut.s_axis_tlast.value = 1 if idx == num_samples - 1 else 0
         while True:
             await RisingEdge(dut.clk)
@@ -286,13 +297,14 @@ async def nco_cfo_compensation(dut):
                 break
         dut.s_axis_tvalid.value = 0
         dut.s_axis_tlast.value = 0
+        dut.s_axis_tuser.value = 0
         if idx < 3:
             dut._log.debug(
                 "Input sample %d delivered: I=%s Q=%s"
                 % (idx, [val for val, _ in quantized_records[idx]], [val for _, val in quantized_records[idx]])
             )
 
-    output_records = await capture_task
+    output_records, output_tuser = await capture_task
 
     expected = _compute_expected_records(quantized_records, [phase_inc] * num_samples)
     tol = 1.5 / SCALE
@@ -307,6 +319,9 @@ async def nco_cfo_compensation(dut):
                 )
             assert diff_real <= tol
             assert diff_imag <= tol
+
+    expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
+    assert output_tuser == expected_tuser
 
     plot_dir = Path(__file__).resolve().parent / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
@@ -326,6 +341,7 @@ async def nco_cfo_dynamic_update(dut):
 
     dut.m_axis_tready.value = 1
     dut.s_axis_tvalid.value = 0
+    dut.s_axis_tuser.value = 0
     dut.s_axis_tlast.value = 0
     dut.s_axi_awvalid.value = 0
     dut.s_axi_wvalid.value = 0
@@ -371,6 +387,7 @@ async def nco_cfo_dynamic_update(dut):
         input_records.append([complex(i_vals[ch] / SCALE, q_vals[ch] / SCALE) for ch in range(CHANNELS)])
         dut.s_axis_tdata.value = _pack_samples(i_vals, q_vals)
         dut.s_axis_tvalid.value = 1
+        dut.s_axis_tuser.value = _tuser_value(idx)
         dut.s_axis_tlast.value = 1 if idx == num_samples - 1 else 0
         while True:
             await RisingEdge(dut.clk)
@@ -378,8 +395,9 @@ async def nco_cfo_dynamic_update(dut):
                 break
         dut.s_axis_tvalid.value = 0
         dut.s_axis_tlast.value = 0
+        dut.s_axis_tuser.value = 0
 
-    output_records = await capture_task
+    output_records, output_tuser = await capture_task
 
     expected = _compute_expected_records(quantized_records, phase_schedule)
     tol = 1.5 / SCALE
@@ -394,6 +412,9 @@ async def nco_cfo_dynamic_update(dut):
                 )
             assert diff_real <= tol
             assert diff_imag <= tol
+
+    expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
+    assert output_tuser == expected_tuser
 
     plot_dir = Path(__file__).resolve().parent / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
@@ -413,6 +434,7 @@ async def nco_cfo_multi_cfo_sweep(dut):
 
     dut.m_axis_tready.value = 1
     dut.s_axis_tvalid.value = 0
+    dut.s_axis_tuser.value = 0
     dut.s_axis_tlast.value = 0
     dut.s_axi_awvalid.value = 0
     dut.s_axi_wvalid.value = 0
@@ -442,6 +464,7 @@ async def nco_cfo_multi_cfo_sweep(dut):
         phase_inc = int(freq * (1 << ACC_WIDTH)) & PHASE_MASK
         await _axi_write(dut, 0x0, phase_inc)
         for idx in range(segment_length):
+            sample_idx = seg_idx * segment_length + idx
             angle = (phase_acc / float(1 << ACC_WIDTH)) * 2 * math.pi
             rot = complex(math.cos(angle), math.sin(angle))
             samples = baseband_segment[:, idx] * rot
@@ -451,6 +474,7 @@ async def nco_cfo_multi_cfo_sweep(dut):
             input_records.append([complex(i_vals[ch] / SCALE, q_vals[ch] / SCALE) for ch in range(CHANNELS)])
             dut.s_axis_tdata.value = _pack_samples(i_vals, q_vals)
             dut.s_axis_tvalid.value = 1
+            dut.s_axis_tuser.value = _tuser_value(sample_idx)
             dut.s_axis_tlast.value = 1 if (seg_idx == len(segment_cfos) - 1 and idx == segment_length - 1) else 0
             while True:
                 await RisingEdge(dut.clk)
@@ -458,10 +482,11 @@ async def nco_cfo_multi_cfo_sweep(dut):
                     break
             dut.s_axis_tvalid.value = 0
             dut.s_axis_tlast.value = 0
+            dut.s_axis_tuser.value = 0
             phase_schedule.append(phase_inc)
             phase_acc = (phase_acc + phase_inc) & PHASE_MASK
 
-    output_records = await capture_task
+    output_records, output_tuser = await capture_task
 
     expected = _compute_expected_records(quantized_records, phase_schedule)
     tol = 1.5 / SCALE
@@ -476,6 +501,9 @@ async def nco_cfo_multi_cfo_sweep(dut):
                 )
             assert diff_real <= tol
             assert diff_imag <= tol
+
+    expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
+    assert output_tuser == expected_tuser
 
     plot_dir = Path(__file__).resolve().parent / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
@@ -497,6 +525,7 @@ async def nco_cfo_constant_input_cfo_sweep(dut):
 
     dut.m_axis_tready.value = 1
     dut.s_axis_tvalid.value = 0
+    dut.s_axis_tuser.value = 0
     dut.s_axis_tlast.value = 0
     dut.s_axi_awvalid.value = 0
     dut.s_axi_wvalid.value = 0
@@ -536,6 +565,7 @@ async def nco_cfo_constant_input_cfo_sweep(dut):
             input_records.append([complex(i_vals[ch] / SCALE, q_vals[ch] / SCALE) for ch in range(CHANNELS)])
             dut.s_axis_tdata.value = _pack_samples(i_vals, q_vals)
             dut.s_axis_tvalid.value = 1
+            dut.s_axis_tuser.value = _tuser_value(sample_idx)
             dut.s_axis_tlast.value = 1 if sample_idx == num_samples - 1 else 0
             while True:
                 await RisingEdge(dut.clk)
@@ -543,9 +573,10 @@ async def nco_cfo_constant_input_cfo_sweep(dut):
                     break
             dut.s_axis_tvalid.value = 0
             dut.s_axis_tlast.value = 0
+            dut.s_axis_tuser.value = 0
             phase_schedule.append(phase_inc)
 
-    output_records = await capture_task
+    output_records, output_tuser = await capture_task
 
     expected = _compute_expected_records(quantized_records, phase_schedule)
     tol = 1.5 / SCALE
@@ -560,6 +591,9 @@ async def nco_cfo_constant_input_cfo_sweep(dut):
                 )
             assert diff_real <= tol
             assert diff_imag <= tol
+
+    expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
+    assert output_tuser == expected_tuser
 
     plot_dir = Path(__file__).resolve().parent / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
@@ -581,6 +615,7 @@ async def nco_cfo_zero_cfo_passthrough(dut):
 
     dut.m_axis_tready.value = 1
     dut.s_axis_tvalid.value = 0
+    dut.s_axis_tuser.value = 0
     dut.s_axis_tlast.value = 0
     dut.s_axi_awvalid.value = 0
     dut.s_axi_wvalid.value = 0
@@ -606,6 +641,7 @@ async def nco_cfo_zero_cfo_passthrough(dut):
         input_records.append([complex(i_vals[ch] / SCALE, q_vals[ch] / SCALE) for ch in range(CHANNELS)])
         dut.s_axis_tdata.value = _pack_samples(i_vals, q_vals)
         dut.s_axis_tvalid.value = 1
+        dut.s_axis_tuser.value = _tuser_value(idx)
         dut.s_axis_tlast.value = 1 if idx == num_samples - 1 else 0
         while True:
             await RisingEdge(dut.clk)
@@ -613,8 +649,9 @@ async def nco_cfo_zero_cfo_passthrough(dut):
                 break
         dut.s_axis_tvalid.value = 0
         dut.s_axis_tlast.value = 0
+        dut.s_axis_tuser.value = 0
 
-    output_records = await capture_task
+    output_records, output_tuser = await capture_task
 
     expected = _compute_expected_records(quantized_records, [0] * num_samples)
     tol = 1.5 / SCALE
@@ -630,6 +667,9 @@ async def nco_cfo_zero_cfo_passthrough(dut):
             assert diff_real <= tol
             assert diff_imag <= tol
 
+    expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
+    assert output_tuser == expected_tuser
+
 
 @cocotb.test()
 async def nco_cfo_backpressure_stress(dut):
@@ -638,6 +678,7 @@ async def nco_cfo_backpressure_stress(dut):
 
     dut.m_axis_tready.value = 1
     dut.s_axis_tvalid.value = 0
+    dut.s_axis_tuser.value = 0
     dut.s_axis_tlast.value = 0
     dut.s_axi_awvalid.value = 0
     dut.s_axi_wvalid.value = 0
@@ -674,6 +715,7 @@ async def nco_cfo_backpressure_stress(dut):
         quantized_records.append(list(zip(i_vals, q_vals)))
         dut.s_axis_tdata.value = _pack_samples(i_vals, q_vals)
         dut.s_axis_tvalid.value = 1
+        dut.s_axis_tuser.value = _tuser_value(idx)
         dut.s_axis_tlast.value = 1 if idx == num_samples - 1 else 0
         while True:
             await RisingEdge(dut.clk)
@@ -681,8 +723,9 @@ async def nco_cfo_backpressure_stress(dut):
                 break
         dut.s_axis_tvalid.value = 0
         dut.s_axis_tlast.value = 0
+        dut.s_axis_tuser.value = 0
 
-    output_records = await capture_task
+    output_records, output_tuser = await capture_task
     expected = _compute_expected_records(quantized_records, [phase_inc] * num_samples)
     tol = 1.5 / SCALE
     for idx in range(num_samples):
@@ -697,6 +740,9 @@ async def nco_cfo_backpressure_stress(dut):
             assert diff_real <= tol
             assert diff_imag <= tol
 
+    expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
+    assert output_tuser == expected_tuser
+
 
 @cocotb.test()
 async def nco_cfo_saturation_extents(dut):
@@ -705,6 +751,7 @@ async def nco_cfo_saturation_extents(dut):
 
     dut.m_axis_tready.value = 1
     dut.s_axis_tvalid.value = 0
+    dut.s_axis_tuser.value = 0
     dut.s_axis_tlast.value = 0
     dut.s_axi_awvalid.value = 0
     dut.s_axi_wvalid.value = 0
@@ -739,6 +786,7 @@ async def nco_cfo_saturation_extents(dut):
         quantized_records.append(list(zip(i_vals, q_vals)))
         dut.s_axis_tdata.value = _pack_samples(i_vals, q_vals)
         dut.s_axis_tvalid.value = 1
+        dut.s_axis_tuser.value = _tuser_value(idx)
         dut.s_axis_tlast.value = 1 if idx == num_samples - 1 else 0
         while True:
             await RisingEdge(dut.clk)
@@ -746,7 +794,8 @@ async def nco_cfo_saturation_extents(dut):
                 break
         dut.s_axis_tvalid.value = 0
         dut.s_axis_tlast.value = 0
-    output_records = await capture_task
+        dut.s_axis_tuser.value = 0
+    output_records, output_tuser = await capture_task
 
     expected = _compute_expected_records(quantized_records, [phase_inc] * num_samples)
     for idx in range(num_samples):
@@ -764,6 +813,9 @@ async def nco_cfo_saturation_extents(dut):
             assert diff_imag <= (1.5 / SCALE)
             assert -1.001 <= got_val.real <= 1.001
             assert -1.001 <= got_val.imag <= 1.001
+
+    expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
+    assert output_tuser == expected_tuser
 
 
 @cocotb.test()
@@ -811,7 +863,9 @@ def test_nco_cfo_compensator():
         toplevel="nco_cfo_compensator",
         toplevel_lang="verilog",
         module=os.path.splitext(os.path.basename(__file__))[0],
-        parameters={},
+        parameters={
+            "AXIS_TUSER_WIDTH": TUSER_WIDTH,
+        },
         sim_build=build_dir,
         simulator="verilator",
         verilog_compile_args=["--trace", "--trace-structs"],
