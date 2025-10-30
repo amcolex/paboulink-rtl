@@ -71,15 +71,15 @@ module minn_preamble_detector #(
     localparam logic [OUT_ADDR_WIDTH:0]   OUTPUT_DEPTH_COUNT = (OUT_ADDR_WIDTH+1)'(OUTPUT_DEPTH);
     localparam logic [OUT_ADDR_WIDTH:0]   OUTPUT_DELAY_COUNT = (OUT_ADDR_WIDTH+1)'(OUTPUT_DELAY);
 
-    typedef struct packed {
-        logic signed [INPUT_WIDTH-1:0] ch0_i;
-        logic signed [INPUT_WIDTH-1:0] ch0_q;
-        logic signed [INPUT_WIDTH-1:0] ch1_i;
-        logic signed [INPUT_WIDTH-1:0] ch1_q;
-        logic                          flag;
-    } output_entry_t;
+    localparam int ENTRY_WIDTH = INPUT_WIDTH * 4;
+    localparam int CH0_I_LSB    = 0;
+    localparam int CH0_Q_LSB    = CH0_I_LSB + INPUT_WIDTH;
+    localparam int CH1_I_LSB    = CH0_Q_LSB + INPUT_WIDTH;
+    localparam int CH1_Q_LSB    = CH1_I_LSB + INPUT_WIDTH;
 
-    output_entry_t buffer [0:OUTPUT_DEPTH-1];
+    (* ram_style = "block" *)
+    logic [ENTRY_WIDTH-1:0] sample_mem [0:OUTPUT_DEPTH-1];
+    logic [OUTPUT_DEPTH-1:0] flag_mem;
 
     logic [OUT_ADDR_WIDTH-1:0] write_ptr;
     logic [OUT_ADDR_WIDTH-1:0] read_ptr;
@@ -301,12 +301,8 @@ module minn_preamble_detector #(
 `endif
 
     // Output buffer management.
-    integer idx;
     always_ff @(posedge clk) begin
         if (rst) begin
-            for (idx = 0; idx < OUTPUT_DEPTH; idx++) begin
-                buffer[idx] = '0;
-            end
             write_ptr    <= '0;
             read_ptr     <= '0;
             sample_count <= '0;
@@ -316,16 +312,22 @@ module minn_preamble_detector #(
             out_ch1_i    <= '0;
             out_ch1_q    <= '0;
             frame_start  <= 1'b0;
+            flag_mem     <= '0;
 `ifdef MINN_METRIC_DEBUG
             metric_dbg   <= '0;
 `endif
         end else begin
+            out_valid   <= 1'b0;
+            frame_start <= 1'b0;
+
             if (in_valid) begin
-                buffer[write_ptr].ch0_i <= in_ch0_i;
-                buffer[write_ptr].ch0_q <= in_ch0_q;
-                buffer[write_ptr].ch1_i <= in_ch1_i;
-                buffer[write_ptr].ch1_q <= in_ch1_q;
-                buffer[write_ptr].flag  <= 1'b0;
+                sample_mem[write_ptr] <= {
+                    in_ch1_q,
+                    in_ch1_i,
+                    in_ch0_q,
+                    in_ch0_i
+                };
+                flag_mem[write_ptr] <= 1'b0;
 
                 if (write_ptr == WRITE_WRAP) begin
                     write_ptr <= '0;
@@ -338,12 +340,12 @@ module minn_preamble_detector #(
                 end
 
                 if (sample_count >= OUTPUT_DELAY_COUNT) begin
-                    out_valid   <= 1'b1;
-                    out_ch0_i   <= buffer[read_ptr].ch0_i;
-                    out_ch0_q   <= buffer[read_ptr].ch0_q;
-                    out_ch1_i   <= buffer[read_ptr].ch1_i;
-                    out_ch1_q   <= buffer[read_ptr].ch1_q;
-                    frame_start <= buffer[read_ptr].flag;
+                    out_valid <= 1'b1;
+                    out_ch0_i <= sample_mem[read_ptr][CH0_I_LSB +: INPUT_WIDTH];
+                    out_ch0_q <= sample_mem[read_ptr][CH0_Q_LSB +: INPUT_WIDTH];
+                    out_ch1_i <= sample_mem[read_ptr][CH1_I_LSB +: INPUT_WIDTH];
+                    out_ch1_q <= sample_mem[read_ptr][CH1_Q_LSB +: INPUT_WIDTH];
+                    frame_start <= flag_mem[read_ptr];
 
                     if (read_ptr == READ_WRAP) begin
                         read_ptr <= '0;
@@ -360,7 +362,7 @@ module minn_preamble_detector #(
             end
 
             if (detection_pulse) begin
-                buffer[detection_addr].flag <= 1'b1;
+                flag_mem[detection_addr] <= 1'b1;
             end
 
 `ifdef MINN_METRIC_DEBUG
