@@ -32,3 +32,7 @@ The test flow invokes Verilator through `cocotb-test`, generating build artifact
 - Capture verbose cocotb logs: `uv run pytest -s`
 
 With the environment prepared, you can iterate on RTL modules in `rtl/` and drive new verification scenarios from `tests/`.
+
+
+## 5. RTL Guidelines
+ALWAYS Read the [RTL Guidelines](docs/verilog_guidelines.md) before contributing new RTL code to ensure compliance with project standards and best practices.
