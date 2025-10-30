@@ -484,6 +484,6 @@ def test_minn_preamble_detector():
             "COCOTB_RESULTS_FILE": os.path.join(build_dir, "results.xml"),
         },
         defines={
-            "MINN_METRIC_DEBUG": 1,
+            "DEBUG": 1,
         },
     )

@@ -32,7 +32,7 @@ module minn_preamble_detector #(
     output logic                       m_axis_tlast,
     // Frame start indicator aligned with output handshake
     output logic                       frame_start
-`ifdef MINN_METRIC_DEBUG
+`ifdef DEBUG
    ,output logic [METRIC_DBG_WIDTH-1:0] metric_dbg
 `endif
 );
@@ -416,7 +416,7 @@ module minn_preamble_detector #(
         end
     endfunction
 
-`ifdef MINN_METRIC_DEBUG
+`ifdef DEBUG
     // -------------------------------------------------------------------------
     // Metric debug truncation helper
     // -------------------------------------------------------------------------
@@ -457,7 +457,7 @@ module minn_preamble_detector #(
             for (int q = 0; q < DET_QUEUE_DEPTH; q++) begin
                 detect_queue[q] <= '0;
             end
-`ifdef MINN_METRIC_DEBUG
+`ifdef DEBUG
             metric_dbg          <= '0;
 `endif
         end else begin
@@ -517,7 +517,7 @@ module minn_preamble_detector #(
                 + (push_event_req ? {{DET_QUEUE_ADDR_WIDTH{1'b0}}, 1'b1} : '0)
                 - (pop_event_req  ? {{DET_QUEUE_ADDR_WIDTH{1'b0}}, 1'b1} : '0);
 
-`ifdef MINN_METRIC_DEBUG
+`ifdef DEBUG
             if (metric_valid) begin
                 if (SMOOTH_SHIFT == 0) begin
                     metric_dbg <= metric_trunc(corr_positive);
