@@ -24,22 +24,22 @@ module minn_delay_line #(
         localparam addr_t  LAST_ADDR   = addr_t'(DEPTH - 1);
         localparam count_t DEPTH_COUNT = count_t'(DEPTH);
 
+        (* ram_style = "block" *)
         logic signed [WIDTH-1:0] mem [0:DEPTH-1];
-        addr_t                    wr_ptr;
-        count_t                   fill_count;
 
-        integer i;
+        addr_t  wr_ptr;
+        count_t fill_count;
+
         always_ff @(posedge clk) begin
             if (rst) begin
-                for (i = 0; i < DEPTH; i++) begin
-                    mem[i] = '0;
-                end
                 wr_ptr     <= '0;
                 fill_count <= '0;
                 out_data   <= '0;
                 out_valid  <= 1'b0;
             end else if (in_valid) begin
-                out_data <= mem[wr_ptr];
+                logic signed [WIDTH-1:0] read_data;
+
+                read_data = (fill_count < DEPTH_COUNT) ? '0 : mem[wr_ptr];
                 mem[wr_ptr] <= in_data;
 
                 if (wr_ptr == LAST_ADDR) begin
@@ -49,10 +49,12 @@ module minn_delay_line #(
                 end
 
                 if (fill_count < DEPTH_COUNT) begin
-                    fill_count <= fill_count + 1'b1;
+                    fill_count <= fill_count + count_t'(1);
                     out_valid  <= 1'b0;
+                    out_data   <= '0;
                 end else begin
-                    out_valid  <= 1'b1;
+                    out_valid <= 1'b1;
+                    out_data  <= read_data;
                 end
             end else begin
                 out_valid <= 1'b0;

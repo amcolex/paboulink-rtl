@@ -24,17 +24,15 @@ module minn_running_sum #(
         localparam addr_t  LAST_ADDR   = addr_t'(DEPTH - 1);
         localparam count_t DEPTH_COUNT = count_t'(DEPTH);
 
+        (* ram_style = "block" *)
         logic signed [WIDTH-1:0] window [0:DEPTH-1];
-        addr_t                    wr_ptr;
-        count_t                   fill_count;
+
+        addr_t                       wr_ptr;
+        count_t                      fill_count;
         logic signed [SUM_WIDTH-1:0] sum_reg;
 
-        integer i;
         always_ff @(posedge clk) begin
             if (rst) begin
-                for (i = 0; i < DEPTH; i++) begin
-                    window[i] = '0;
-                end
                 wr_ptr     <= '0;
                 fill_count <= '0;
                 sum_reg    <= '0;
@@ -42,9 +40,16 @@ module minn_running_sum #(
                 sum_valid  <= 1'b0;
             end else if (in_valid) begin
                 logic signed [WIDTH-1:0] oldest;
+                logic signed [SUM_WIDTH-1:0] addend;
+                logic signed [SUM_WIDTH-1:0] subtrahend;
                 logic signed [SUM_WIDTH-1:0] next_sum;
 
-                oldest  = window[wr_ptr];
+                if (fill_count < DEPTH_COUNT) begin
+                    oldest = '0;
+                end else begin
+                    oldest = window[wr_ptr];
+                end
+
                 window[wr_ptr] <= sample_in;
 
                 if (wr_ptr == LAST_ADDR) begin
@@ -53,15 +58,16 @@ module minn_running_sum #(
                     wr_ptr <= wr_ptr + 1'b1;
                 end
 
-                next_sum = sum_reg
-                    + $signed({{(SUM_WIDTH-WIDTH){sample_in[WIDTH-1]}}, sample_in})
-                    - $signed({{(SUM_WIDTH-WIDTH){oldest[WIDTH-1]}}, oldest});
-                sum_reg  <= next_sum;
-                sum_out  <= next_sum;
+                addend     = $signed({{(SUM_WIDTH-WIDTH){sample_in[WIDTH-1]}}, sample_in});
+                subtrahend = $signed({{(SUM_WIDTH-WIDTH){oldest[WIDTH-1]}}, oldest});
+                next_sum   = sum_reg + addend - subtrahend;
+
+                sum_reg <= next_sum;
+                sum_out <= next_sum;
 
                 if (fill_count < DEPTH_COUNT) begin
                     count_t next_count;
-                    next_count = fill_count + 1'b1;
+                    next_count = fill_count + count_t'(1);
                     fill_count <= next_count;
                     if (next_count >= DEPTH_COUNT) begin
                         sum_valid <= 1'b1;
