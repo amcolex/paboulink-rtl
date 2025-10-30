@@ -38,6 +38,15 @@ TRAILING_GUARD_LEN = NFFT + OUTPUT_MARGIN
 AWGN_SNR_DB = 10.0
 
 
+def _pack_axis_samples(ch0_i: int, ch0_q: int, ch1_i: int, ch1_q: int) -> int:
+    mask = (1 << INPUT_WIDTH) - 1
+    word = (ch0_i & mask)
+    word |= (ch0_q & mask) << INPUT_WIDTH
+    word |= (ch1_i & mask) << (2 * INPUT_WIDTH)
+    word |= (ch1_q & mask) << (3 * INPUT_WIDTH)
+    return word
+
+
 def running_sum(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 0:
         raise ValueError("window must be positive")
@@ -171,11 +180,10 @@ async def minn_detector_flags_expected_sample(dut):
     cocotb.start_soon(clock.start())
 
     dut.rst.value = 1
-    dut.in_valid.value = 0
-    dut.in_ch0_i.value = 0
-    dut.in_ch0_q.value = 0
-    dut.in_ch1_i.value = 0
-    dut.in_ch1_q.value = 0
+    dut.s_axis_tvalid.value = 0
+    dut.s_axis_tdata.value = 0
+    dut.s_axis_tlast.value = 0
+    dut.m_axis_tready.value = 1
 
     for _ in range(5):
         await RisingEdge(dut.clk)
@@ -260,30 +268,47 @@ async def minn_detector_flags_expected_sample(dut):
     metric_dbg_trace = []
 
     for ch0_i_val, ch0_q_val, ch1_i_val, ch1_q_val in total_samples:
-        input_ch0_i_trace.append(int(ch0_i_val))
-        input_ch0_q_trace.append(int(ch0_q_val))
-        dut.in_valid.value = 1
-        dut.in_ch0_i.value = int(ch0_i_val)
-        dut.in_ch0_q.value = int(ch0_q_val)
-        dut.in_ch1_i.value = int(ch1_i_val)
-        dut.in_ch1_q.value = int(ch1_q_val)
-        await RisingEdge(dut.clk)
-        out_valid_int = dut.out_valid.value.integer
-        frame_start_int = dut.frame_start.value.integer
+        ch0_i_int = int(ch0_i_val)
+        ch0_q_int = int(ch0_q_val)
+        ch1_i_int = int(ch1_i_val)
+        ch1_q_int = int(ch1_q_val)
+        input_ch0_i_trace.append(ch0_i_int)
+        input_ch0_q_trace.append(ch0_q_int)
+
+        dut.s_axis_tdata.value = _pack_axis_samples(ch0_i_int, ch0_q_int, ch1_i_int, ch1_q_int)
+        dut.s_axis_tvalid.value = 1
+        dut.s_axis_tlast.value = 0
+
+        while True:
+            await RisingEdge(dut.clk)
+            if dut.m_axis_tvalid.value.integer:
+                frame_start_int = dut.frame_start.value.integer
+                output_indices.append(out_index)
+                frame_start_trace.append(frame_start_int)
+                if frame_start_int:
+                    flagged_indices.append(out_index)
+                out_index += 1
+            if dut.s_axis_tvalid.value.integer and dut.s_axis_tready.value.integer:
+                break
+
+        dut.s_axis_tvalid.value = 0
+        dut.s_axis_tlast.value = 0
+        dut.s_axis_tdata.value = 0
+
         if metric_dbg_available:
             metric_dbg_trace.append(int(dut.metric_dbg.value))
         else:
             metric_dbg_trace.append(0)
-        if out_valid_int:
+
+    for _ in range(5):
+        await RisingEdge(dut.clk)
+        if dut.m_axis_tvalid.value.integer:
+            frame_start_int = dut.frame_start.value.integer
             output_indices.append(out_index)
             frame_start_trace.append(frame_start_int)
             if frame_start_int:
                 flagged_indices.append(out_index)
             out_index += 1
-
-    dut.in_valid.value = 0
-    for _ in range(5):
-        await RisingEdge(dut.clk)
 
     observed_index = flagged_indices[0] if flagged_indices else None
 

@@ -7,6 +7,7 @@
 // -----------------------------------------------------------------------------
 module minn_preamble_detector #(
     parameter int INPUT_WIDTH       = 12,
+    parameter int AXIS_DATA_WIDTH   = INPUT_WIDTH * 4,
     parameter int NFFT              = 2048,
     parameter int CP_LEN            = 512,
     parameter int OUTPUT_MARGIN     = CP_LEN,
@@ -17,21 +18,22 @@ module minn_preamble_detector #(
     parameter int TIMING_OFFSET     = -CP_LEN,
     parameter int METRIC_DBG_WIDTH  = 24
 ) (
-    input  logic                          clk,
-    input  logic                          rst,
-    input  logic                          in_valid,
-    input  logic signed [INPUT_WIDTH-1:0] in_ch0_i,
-    input  logic signed [INPUT_WIDTH-1:0] in_ch0_q,
-    input  logic signed [INPUT_WIDTH-1:0] in_ch1_i,
-    input  logic signed [INPUT_WIDTH-1:0] in_ch1_q,
-    output logic                          out_valid,
-    output logic signed [INPUT_WIDTH-1:0] out_ch0_i,
-    output logic signed [INPUT_WIDTH-1:0] out_ch0_q,
-    output logic signed [INPUT_WIDTH-1:0] out_ch1_i,
-    output logic signed [INPUT_WIDTH-1:0] out_ch1_q,
-    output logic                          frame_start
+    input  logic                        clk,
+    input  logic                        rst,
+    // AXI4-Stream input (packed as {ch1_q, ch1_i, ch0_q, ch0_i})
+    input  logic [AXIS_DATA_WIDTH-1:0] s_axis_tdata,
+    input  logic                       s_axis_tvalid,
+    output logic                       s_axis_tready,
+    input  logic                       s_axis_tlast,
+    // AXI4-Stream output (packed as {ch1_q, ch1_i, ch0_q, ch0_i})
+    output logic [AXIS_DATA_WIDTH-1:0] m_axis_tdata,
+    output logic                       m_axis_tvalid,
+    input  logic                       m_axis_tready,
+    output logic                       m_axis_tlast,
+    // Frame start indicator aligned with output handshake
+    output logic                       frame_start
 `ifdef MINN_METRIC_DEBUG
-   ,output logic [METRIC_DBG_WIDTH-1:0]   metric_dbg
+   ,output logic [METRIC_DBG_WIDTH-1:0] metric_dbg
 `endif
 );
     // -------------------------------------------------------------------------
@@ -44,6 +46,9 @@ module minn_preamble_detector #(
         end
         if (OUTPUT_MARGIN < 0) begin
             $error("OUTPUT_MARGIN must be non-negative.");
+        end
+        if (AXIS_DATA_WIDTH != (INPUT_WIDTH * 4)) begin
+            $error("AXIS_DATA_WIDTH must equal 4 * INPUT_WIDTH for dual-antenna Minn detector.");
         end
     end
 
@@ -89,7 +94,7 @@ module minn_preamble_detector #(
     localparam logic [OUT_ADDR_WIDTH:0]   OUTPUT_DELAY_COUNT = (OUT_ADDR_WIDTH+1)'(OUTPUT_DELAY);
 
     // Sample packing layout (I/Q pairs for both antennas)
-    localparam int ENTRY_WIDTH = INPUT_WIDTH * 4;
+    localparam int ENTRY_WIDTH = AXIS_DATA_WIDTH;
     localparam int CH0_I_LSB    = 0;
     localparam int CH0_Q_LSB    = CH0_I_LSB + INPUT_WIDTH;
     localparam int CH1_I_LSB    = CH0_Q_LSB + INPUT_WIDTH;
@@ -97,6 +102,7 @@ module minn_preamble_detector #(
 
     (* ram_style = "block" *)
     logic [ENTRY_WIDTH-1:0] sample_mem [0:OUTPUT_DEPTH-1];
+    logic                   sample_last_mem [0:OUTPUT_DEPTH-1];
 
     // Detection queue configuration
     localparam int DET_QUEUE_DEPTH = 4;
@@ -129,18 +135,44 @@ module minn_preamble_detector #(
     logic                      dec_event_req;
     logic                      push_event_req;
 
+    // AXI4-Stream handshake and unpacking
+    logic                       sample_accept;
+    logic signed [INPUT_WIDTH-1:0] in_ch0_i;
+    logic signed [INPUT_WIDTH-1:0] in_ch0_q;
+    logic signed [INPUT_WIDTH-1:0] in_ch1_i;
+    logic signed [INPUT_WIDTH-1:0] in_ch1_q;
+    logic [AXIS_DATA_WIDTH-1:0]    output_data_reg;
+    logic                          output_valid_reg;
+    logic                          output_last_reg;
+    logic                          frame_start_pending;
+    logic                          output_fire;
+    logic                          load_output;
+
+    assign sample_accept = s_axis_tvalid && s_axis_tready;
+    assign in_ch0_i = $signed(s_axis_tdata[CH0_I_LSB +: INPUT_WIDTH]);
+    assign in_ch0_q = $signed(s_axis_tdata[CH0_Q_LSB +: INPUT_WIDTH]);
+    assign in_ch1_i = $signed(s_axis_tdata[CH1_I_LSB +: INPUT_WIDTH]);
+    assign in_ch1_q = $signed(s_axis_tdata[CH1_Q_LSB +: INPUT_WIDTH]);
+    assign m_axis_tdata  = output_data_reg;
+    assign m_axis_tvalid = output_valid_reg;
+    assign m_axis_tlast  = output_last_reg;
+    assign output_fire   = output_valid_reg && m_axis_tready;
+
     // Circular buffer pointer helpers
     assign read_ptr_plus1 = (read_ptr == READ_WRAP) ? '0 : read_ptr + 1'b1;
-    assign produce_output = in_valid && (sample_count >= OUTPUT_DELAY_COUNT);
+    assign produce_output = sample_accept && (sample_count >= OUTPUT_DELAY_COUNT);
     assign read_ptr_future = produce_output ? read_ptr_plus1 : read_ptr;
+    assign load_output = produce_output;
     assign sample_count_incremented = (sample_count < OUTPUT_DEPTH_COUNT)
         ? sample_count + 1'b1
         : sample_count;
-    assign sample_count_future = in_valid ? sample_count_incremented : sample_count;
+    assign sample_count_future = sample_accept ? sample_count_incremented : sample_count;
     assign sample_gap_raw = (sample_count_future >= OUTPUT_DELAY_COUNT)
         ? '0
         : OUTPUT_DELAY_COUNT - sample_count_future;
     assign fill_gap = {{(DET_TIMER_WIDTH-(OUT_ADDR_WIDTH+1)){1'b0}}, sample_gap_raw};
+    assign s_axis_tready = (!output_valid_reg) || m_axis_tready;
+    assign frame_start = output_fire && frame_start_pending;
     assign queue_has_entries = (detect_count != {(DET_QUEUE_ADDR_WIDTH+1){1'b0}});
     assign detect_front = detect_queue[detect_rd_ptr];
     assign pop_event_req = produce_output && queue_has_entries && (detect_front == {DET_TIMER_WIDTH{1'b0}});
@@ -170,7 +202,7 @@ module minn_preamble_detector #(
     ) antenna0 (
         .clk(clk),
         .rst(rst),
-        .in_valid(in_valid),
+        .in_valid(sample_accept),
         .in_i(in_ch0_i),
         .in_q(in_ch0_q),
         .corr_recent(ch0_corr_recent),
@@ -187,7 +219,7 @@ module minn_preamble_detector #(
     ) antenna1 (
         .clk(clk),
         .rst(rst),
-        .in_valid(in_valid),
+        .in_valid(sample_accept),
         .in_i(in_ch1_i),
         .in_q(in_ch1_q),
         .corr_recent(ch1_corr_recent),
@@ -200,7 +232,7 @@ module minn_preamble_detector #(
 
     // Metric is valid once both antenna pipelines have produced taps.
     logic metric_valid;
-    assign metric_valid = in_valid && ch0_valid && ch1_valid;
+    assign metric_valid = sample_accept && ch0_valid && ch1_valid;
 
     // -------------------------------------------------------------------------
     // Correlation and energy aggregation across antennas
@@ -412,53 +444,51 @@ module minn_preamble_detector #(
     // -------------------------------------------------------------------------
     always_ff @(posedge clk) begin
         if (rst) begin
-            write_ptr     <= '0;
-            read_ptr      <= '0;
-            sample_count  <= '0;
-            out_valid     <= 1'b0;
-            out_ch0_i     <= '0;
-            out_ch0_q     <= '0;
-            out_ch1_i     <= '0;
-            out_ch1_q     <= '0;
-            frame_start   <= 1'b0;
-            detect_wr_ptr <= '0;
-            detect_rd_ptr <= '0;
-            detect_count  <= '0;
+            write_ptr           <= '0;
+            read_ptr            <= '0;
+            sample_count        <= '0;
+            output_data_reg     <= '0;
+            output_last_reg     <= 1'b0;
+            output_valid_reg    <= 1'b0;
+            frame_start_pending <= 1'b0;
+            detect_wr_ptr       <= '0;
+            detect_rd_ptr       <= '0;
+            detect_count        <= '0;
             for (int q = 0; q < DET_QUEUE_DEPTH; q++) begin
                 detect_queue[q] <= '0;
             end
 `ifdef MINN_METRIC_DEBUG
-            metric_dbg    <= '0;
+            metric_dbg          <= '0;
 `endif
         end else begin
-            out_valid   <= 1'b0;
-            frame_start <= 1'b0;
+            if (output_fire) begin
+                output_valid_reg <= 1'b0;
+            end
+            if (load_output) begin
+                output_valid_reg    <= 1'b1;
+                output_data_reg     <= sample_mem[read_ptr];
+                output_last_reg     <= sample_last_mem[read_ptr];
+                read_ptr            <= read_ptr_plus1;
+            end else if (output_fire) begin
+                output_last_reg <= 1'b0;
+            end
 
-            if (in_valid) begin
-                sample_mem[write_ptr] <= {
-                    in_ch1_q,
-                    in_ch1_i,
-                    in_ch0_q,
-                    in_ch0_i
-                };
+            if (load_output) begin
+                frame_start_pending <= pop_event_req;
+            end else if (output_fire) begin
+                frame_start_pending <= 1'b0;
+            end
 
+            if (sample_accept) begin
+                sample_mem[write_ptr]      <= s_axis_tdata;
+                sample_last_mem[write_ptr] <= s_axis_tlast;
                 if (write_ptr == WRITE_WRAP) begin
                     write_ptr <= '0;
                 end else begin
                     write_ptr <= write_ptr + 1'b1;
                 end
-
                 if (sample_count < OUTPUT_DEPTH_COUNT) begin
                     sample_count <= sample_count + 1'b1;
-                end
-
-                if (sample_count >= OUTPUT_DELAY_COUNT) begin
-                    out_valid <= 1'b1;
-                    out_ch0_i <= sample_mem[read_ptr][CH0_I_LSB +: INPUT_WIDTH];
-                    out_ch0_q <= sample_mem[read_ptr][CH0_Q_LSB +: INPUT_WIDTH];
-                    out_ch1_i <= sample_mem[read_ptr][CH1_I_LSB +: INPUT_WIDTH];
-                    out_ch1_q <= sample_mem[read_ptr][CH1_Q_LSB +: INPUT_WIDTH];
-                    read_ptr  <= read_ptr_plus1;
                 end
             end
 
@@ -467,7 +497,6 @@ module minn_preamble_detector #(
             end
 
             if (pop_event_req) begin
-                frame_start <= 1'b1;
                 if (detect_rd_ptr == DET_QUEUE_ADDR_WIDTH'(DET_QUEUE_DEPTH-1)) begin
                     detect_rd_ptr <= '0;
                 end else begin
