@@ -1,3 +1,10 @@
+// -----------------------------------------------------------------------------
+// Module: minn_running_sum
+// -----------------------------------------------------------------------------
+// Maintains a sliding window sum over the last DEPTH samples. New input samples
+// are accepted when `in_valid` is asserted. Once the window is filled, the
+// accumulated result is presented with `sum_valid`.
+// -----------------------------------------------------------------------------
 module minn_running_sum #(
     parameter int WIDTH = 16,
     parameter int DEPTH = 16
@@ -9,11 +16,17 @@ module minn_running_sum #(
     output logic signed [WIDTH + $clog2(DEPTH + 1)-1:0] sum_out,
     output logic                      sum_valid
 );
+    // -------------------------------------------------------------------------
+    // Parameter validation
+    // -------------------------------------------------------------------------
     if (DEPTH <= 0) begin : g_invalid_depth
         initial begin
             $error("minn_running_sum DEPTH must be positive.");
         end
     end else begin : g_sum
+        // ---------------------------------------------------------------------
+        // Derived widths and type aliases
+        // ---------------------------------------------------------------------
         localparam int ADDR_WIDTH  = (DEPTH <= 1) ? 1 : $clog2(DEPTH);
         localparam int COUNT_WIDTH = $clog2(DEPTH + 1);
         localparam int SUM_WIDTH   = WIDTH + COUNT_WIDTH;
@@ -31,6 +44,9 @@ module minn_running_sum #(
         count_t                      fill_count;
         logic signed [SUM_WIDTH-1:0] sum_reg;
 
+        // ---------------------------------------------------------------------
+        // Sliding window sum update
+        // ---------------------------------------------------------------------
         always_ff @(posedge clk) begin
             if (rst) begin
                 wr_ptr     <= '0;

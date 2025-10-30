@@ -1,3 +1,10 @@
+// -----------------------------------------------------------------------------
+// Module: minn_delay_line
+// -----------------------------------------------------------------------------
+// Streaming delay line with a parameterized width and depth. Samples are written
+// when `in_valid` is asserted and emerge after DEPTH cycles once the pipeline
+// fills. Output is held invalid while the memory priming phase completes.
+// -----------------------------------------------------------------------------
 module minn_delay_line #(
     parameter int WIDTH = 16,
     parameter int DEPTH = 1
@@ -10,11 +17,17 @@ module minn_delay_line #(
     output logic signed [WIDTH-1:0]   out_data
 );
 
+    // -------------------------------------------------------------------------
+    // Parameter validation
+    // -------------------------------------------------------------------------
     if (DEPTH <= 0) begin : g_invalid_depth
         initial begin
             $error("minn_delay_line DEPTH must be positive.");
         end
     end else begin : g_delay
+        // ---------------------------------------------------------------------
+        // Derived types and state encoding
+        // ---------------------------------------------------------------------
         localparam int ADDR_WIDTH  = (DEPTH <= 1) ? 1 : $clog2(DEPTH);
         localparam int COUNT_WIDTH = (DEPTH <= 1) ? 1 : $clog2(DEPTH + 1);
 
@@ -30,6 +43,9 @@ module minn_delay_line #(
         addr_t  wr_ptr;
         count_t fill_count;
 
+        // ---------------------------------------------------------------------
+        // Write / read pipeline
+        // ---------------------------------------------------------------------
         always_ff @(posedge clk) begin
             if (rst) begin
                 wr_ptr     <= '0;

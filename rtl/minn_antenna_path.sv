@@ -1,3 +1,10 @@
+// -----------------------------------------------------------------------------
+// Module: minn_antenna_path
+// -----------------------------------------------------------------------------
+// Implements the Minn correlator primitives for a single antenna stream. The
+// block generates quarter-delayed samples, correlation taps, and energy metrics
+// that feed the preamble detector.
+// -----------------------------------------------------------------------------
 module minn_antenna_path #(
     parameter int INPUT_WIDTH   = 12,
     parameter int QUARTER_LEN   = 512,
@@ -20,7 +27,9 @@ module minn_antenna_path #(
     output logic signed [ENERGY_WIDTH-1:0] energy_previous2,
     output logic                          taps_valid
 );
-    // Quarter-delayed samples.
+    // -------------------------------------------------------------------------
+    // Quarter-delayed input taps
+    // -------------------------------------------------------------------------
     logic signed [INPUT_WIDTH-1:0] delayed_i;
     logic signed [INPUT_WIDTH-1:0] delayed_q;
 
@@ -48,7 +57,9 @@ module minn_antenna_path #(
         .out_data(delayed_q)
     );
 
-    // Quarter-lag product (real part).
+    // -------------------------------------------------------------------------
+    // Quarter-lag correlation product
+    // -------------------------------------------------------------------------
     logic signed [2*INPUT_WIDTH-1:0] prod_ii;
     logic signed [2*INPUT_WIDTH-1:0] prod_qq;
     logic signed [PRODUCT_WIDTH-1:0] quarter_product;
@@ -58,7 +69,9 @@ module minn_antenna_path #(
     assign quarter_product = $signed({prod_ii[2*INPUT_WIDTH-1], prod_ii})
                            + $signed({prod_qq[2*INPUT_WIDTH-1], prod_qq});
 
-    // Instantaneous power.
+    // -------------------------------------------------------------------------
+    // Instantaneous energy accumulation
+    // -------------------------------------------------------------------------
     logic signed [2*INPUT_WIDTH-1:0] power_i;
     logic signed [2*INPUT_WIDTH-1:0] power_q;
     logic signed [POWER_WIDTH-1:0]   power_sum;
@@ -67,7 +80,9 @@ module minn_antenna_path #(
     assign power_q = in_q * in_q;
     assign power_sum = $signed({1'b0, power_i}) + $signed({1'b0, power_q});
 
-    // Running sum of quarter products.
+    // -------------------------------------------------------------------------
+    // Running sum of quarter products
+    // -------------------------------------------------------------------------
     logic signed [CORR_WIDTH-1:0] corr_sum;
     logic                         corr_valid;
 
@@ -83,7 +98,9 @@ module minn_antenna_path #(
         .sum_valid(corr_valid)
     );
 
-    // Running sum of power.
+    // -------------------------------------------------------------------------
+    // Running sum of instantaneous power
+    // -------------------------------------------------------------------------
     logic signed [ENERGY_WIDTH-1:0] energy_sum;
     logic                           energy_valid;
 
@@ -99,7 +116,9 @@ module minn_antenna_path #(
         .sum_valid(energy_valid)
     );
 
-    // Delays for previous taps.
+    // -------------------------------------------------------------------------
+    // Historical taps for metric alignment
+    // -------------------------------------------------------------------------
     logic signed [CORR_WIDTH-1:0]  corr_delay_data;
     logic                           corr_delay_valid;
     logic signed [ENERGY_WIDTH-1:0] energy_delay_q;
@@ -143,6 +162,9 @@ module minn_antenna_path #(
         .out_data(energy_delay_2q)
     );
 
+    // -------------------------------------------------------------------------
+    // Output register update
+    // -------------------------------------------------------------------------
     always_ff @(posedge clk) begin
         if (rst) begin
             corr_recent      <= '0;

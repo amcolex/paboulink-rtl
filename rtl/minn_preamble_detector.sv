@@ -1,4 +1,10 @@
-
+// -----------------------------------------------------------------------------
+// Module: minn_preamble_detector
+// -----------------------------------------------------------------------------
+// Two-antenna Minn-style OFDM preamble detector. Buffers incoming IQ samples,
+// evaluates the running correlation and energy windows, and declares a frame
+// start when the metric exceeds a programmable threshold.
+// -----------------------------------------------------------------------------
 module minn_preamble_detector #(
     parameter int INPUT_WIDTH       = 12,
     parameter int NFFT              = 2048,
@@ -28,6 +34,9 @@ module minn_preamble_detector #(
    ,output logic [METRIC_DBG_WIDTH-1:0]   metric_dbg
 `endif
 );
+    // -------------------------------------------------------------------------
+    // Derived constants and configuration checks
+    // -------------------------------------------------------------------------
     localparam int QUARTER_LEN = NFFT / 4;
     initial begin
         if ((NFFT % 4) != 0) begin
@@ -38,10 +47,12 @@ module minn_preamble_detector #(
         end
     end
 
+    // Output buffering dimensions
     localparam int OUTPUT_DELAY = NFFT;
     localparam int OUTPUT_DEPTH = OUTPUT_DELAY + OUTPUT_MARGIN;
     localparam int OUT_ADDR_WIDTH = (OUTPUT_DEPTH <= 1) ? 1 : $clog2(OUTPUT_DEPTH);
 
+    // Metric width calculations
     localparam int SUM_GROWTH    = (QUARTER_LEN <= 1) ? 1 : $clog2(QUARTER_LEN + 1);
     localparam int PRODUCT_WIDTH = (2 * INPUT_WIDTH) + 1;
     localparam int POWER_WIDTH   = (2 * INPUT_WIDTH) + 1;
@@ -50,6 +61,7 @@ module minn_preamble_detector #(
     localparam int CORR_TOTAL_WIDTH = CORR_WIDTH + 2; // Sum of four quarter correlations.
     localparam int ENERGY_TOTAL_WIDTH = ENERGY_WIDTH + 3; // Sum of six quarter energies.
 
+    // Threshold arithmetic helpers
     localparam int HYST_WIDTH = (HYSTERESIS <= 0) ? 1 : $clog2(HYSTERESIS + 1);
     localparam logic [HYST_WIDTH-1:0] HYST_LIMIT = (HYSTERESIS <= 1)
         ? HYST_WIDTH'(0)
@@ -76,6 +88,7 @@ module minn_preamble_detector #(
     localparam logic [OUT_ADDR_WIDTH:0]   OUTPUT_DEPTH_COUNT = (OUT_ADDR_WIDTH+1)'(OUTPUT_DEPTH);
     localparam logic [OUT_ADDR_WIDTH:0]   OUTPUT_DELAY_COUNT = (OUT_ADDR_WIDTH+1)'(OUTPUT_DELAY);
 
+    // Sample packing layout (I/Q pairs for both antennas)
     localparam int ENTRY_WIDTH = INPUT_WIDTH * 4;
     localparam int CH0_I_LSB    = 0;
     localparam int CH0_Q_LSB    = CH0_I_LSB + INPUT_WIDTH;
@@ -85,12 +98,16 @@ module minn_preamble_detector #(
     (* ram_style = "block" *)
     logic [ENTRY_WIDTH-1:0] sample_mem [0:OUTPUT_DEPTH-1];
 
+    // Detection queue configuration
     localparam int DET_QUEUE_DEPTH = 4;
     localparam int DET_QUEUE_ADDR_WIDTH = (DET_QUEUE_DEPTH <= 1) ? 1 : $clog2(DET_QUEUE_DEPTH);
     localparam int DET_TIMER_WIDTH = OUT_ADDR_WIDTH + 2;
     localparam logic [DET_QUEUE_ADDR_WIDTH:0] DET_QUEUE_DEPTH_COUNT =
         (DET_QUEUE_ADDR_WIDTH+1)'(DET_QUEUE_DEPTH);
 
+    // -------------------------------------------------------------------------
+    // Sample buffering and detection queue state
+    // -------------------------------------------------------------------------
     logic [DET_QUEUE_ADDR_WIDTH-1:0] detect_wr_ptr;
     logic [DET_QUEUE_ADDR_WIDTH-1:0] detect_rd_ptr;
     logic [DET_QUEUE_ADDR_WIDTH:0]   detect_count;
@@ -112,6 +129,7 @@ module minn_preamble_detector #(
     logic                      dec_event_req;
     logic                      push_event_req;
 
+    // Circular buffer pointer helpers
     assign read_ptr_plus1 = (read_ptr == READ_WRAP) ? '0 : read_ptr + 1'b1;
     assign produce_output = in_valid && (sample_count >= OUTPUT_DELAY_COUNT);
     assign read_ptr_future = produce_output ? read_ptr_plus1 : read_ptr;
@@ -129,7 +147,9 @@ module minn_preamble_detector #(
     assign dec_event_req = produce_output && queue_has_entries && (detect_front != {DET_TIMER_WIDTH{1'b0}});
     assign push_event_req = detection_pulse && (detect_count < DET_QUEUE_DEPTH_COUNT);
 
-    // Antenna processing paths.
+    // -------------------------------------------------------------------------
+    // Antenna processing paths
+    // -------------------------------------------------------------------------
     logic signed [CORR_WIDTH-1:0]  ch0_corr_recent;
     logic signed [CORR_WIDTH-1:0]  ch0_corr_prev;
     logic signed [ENERGY_WIDTH-1:0] ch0_energy_recent;
@@ -178,10 +198,13 @@ module minn_preamble_detector #(
         .taps_valid(ch1_valid)
     );
 
+    // Metric is valid once both antenna pipelines have produced taps.
     logic metric_valid;
     assign metric_valid = in_valid && ch0_valid && ch1_valid;
 
-    // Combine correlations and energies across antennas.
+    // -------------------------------------------------------------------------
+    // Correlation and energy aggregation across antennas
+    // -------------------------------------------------------------------------
     logic signed [CORR_WIDTH:0] corr_sum_ch0;
     logic signed [CORR_WIDTH:0] corr_sum_ch1;
     logic signed [CORR_TOTAL_WIDTH-1:0] corr_total;
@@ -204,7 +227,9 @@ module minn_preamble_detector #(
         energy_total   = {1'b0, energy_sum_ch0} + {1'b0, energy_sum_ch1};
     end
 
-    // Positive-only correlation metric.
+    // -------------------------------------------------------------------------
+    // Clamp correlations to positive domain
+    // -------------------------------------------------------------------------
     logic [CORR_TOTAL_WIDTH-1:0] corr_positive;
     always_comb begin
         if (corr_total[CORR_TOTAL_WIDTH-1] == 1'b1) begin
@@ -214,7 +239,9 @@ module minn_preamble_detector #(
         end
     end
 
-    // Optional smoothing.
+    // -------------------------------------------------------------------------
+    // Optional exponential smoothing of the metric
+    // -------------------------------------------------------------------------
     logic [CORR_TOTAL_WIDTH-1:0] smooth_metric;
     generate
         if (SMOOTH_SHIFT == 0) begin : g_no_smooth
@@ -240,7 +267,9 @@ module minn_preamble_detector #(
         end
     endgenerate
 
-    // Threshold comparison via cross multiplication.
+    // -------------------------------------------------------------------------
+    // Threshold comparison via cross multiplication
+    // -------------------------------------------------------------------------
     logic [CORR_SCALED_WIDTH-1:0] corr_scaled_native;
     logic [ENERGY_SCALED_WIDTH-1:0] energy_scaled_native;
     logic [ENERGY_SCALED_WIDTH-1:0] energy_total_ext;
@@ -263,7 +292,9 @@ module minn_preamble_detector #(
     assign energy_scaled = {{(COMP_WIDTH-ENERGY_SCALED_WIDTH){1'b0}}, energy_scaled_native};
     assign above_threshold = metric_valid && (corr_scaled >= energy_scaled);
 
-    // Gate and peak tracking.
+    // -------------------------------------------------------------------------
+    // Gate and peak tracking for detection
+    // -------------------------------------------------------------------------
     logic gate_open;
     logic [CORR_TOTAL_WIDTH-1:0] peak_value;
     logic [OUT_ADDR_WIDTH-1:0]   peak_ptr;
@@ -320,7 +351,9 @@ module minn_preamble_detector #(
         end
     end
 
-    // Compute pointer with timing offset.
+    // -------------------------------------------------------------------------
+    // Pointer arithmetic helpers
+    // -------------------------------------------------------------------------
     function automatic logic [OUT_ADDR_WIDTH-1:0] ptr_with_offset(
         input logic [OUT_ADDR_WIDTH-1:0] base
     );
@@ -352,6 +385,9 @@ module minn_preamble_detector #(
     endfunction
 
 `ifdef MINN_METRIC_DEBUG
+    // -------------------------------------------------------------------------
+    // Metric debug truncation helper
+    // -------------------------------------------------------------------------
     function automatic logic [METRIC_DBG_WIDTH-1:0] metric_trunc(
         input logic [CORR_TOTAL_WIDTH-1:0] value
     );
@@ -371,7 +407,9 @@ module minn_preamble_detector #(
     endfunction
 `endif
 
-    // Output buffer management.
+    // -------------------------------------------------------------------------
+    // Output buffer management
+    // -------------------------------------------------------------------------
     always_ff @(posedge clk) begin
         if (rst) begin
             write_ptr     <= '0;
