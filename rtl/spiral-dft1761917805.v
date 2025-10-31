@@ -30,19 +30,18 @@
 
 //   Input/output stream: 2 complex words per cycle
 //   Throughput: one transform every 11287 cycles
-//   Latency: 11287 cycles
+//   Latency: 12267 cycles
 
 //   Resources required:
 //     4 multipliers (12 x 12 bit)
 //     1 adders (11 x 11 bit)
 //     6 adders (12 x 12 bit)
-//     1 RAMs (1014 words, 5 bits per word)
-//     2 RAMs (2048 words, 24 bits per word)
+//     4 RAMs (2048 words, 24 bits per word)
 //     2 ROMs (2048 words, 12 bits per word)
 
-// Generated on Wed Oct 29 19:02:47 UTC 2025
+// Generated on Fri Oct 31 13:36:54 UTC 2025
 
-// Latency: 11287 clock cycles
+// Latency: 12267 clock cycles
 // Throughput: 1 transform every 11287 cycles
 
 
@@ -64,8 +63,8 @@
 // that the output vector will begin streaming out of the system
  // on the following cycle.
 
-// The system has a latency of 11287 cycles.  This means that
-// the 'next_out' will be asserted 11287 cycles after the user
+// The system has a latency of 12267 cycles.  This means that
+// the 'next_out' will be asserted 12267 cycles after the user
 // asserts 'next'.
 
 // The simple testbench below will demonstrate the timing for loading
@@ -103,11 +102,11 @@ module dft_testbench();
 
    // Instantiate top-level module of core 'X' signals are system inputs
    // and 'Y' signals are system outputs
-   ICompose_71024 IComposeInst71245(.next(next), .clk(clk), .reset(reset), .next_out(next_out),
-       .X0(X0), .Y0(Y0),
-       .X1(X1), .Y1(Y1),
-       .X2(X2), .Y2(Y2),
-       .X3(X3), .Y3(Y3));
+   dft_top dft_top_instance (.clk(clk), .reset(reset), .next(next), .next_out(next_out),
+    .X0(X0), .Y0(Y0),
+    .X1(X1), .Y1(Y1),
+    .X2(X2), .Y2(Y2),
+    .X3(X3), .Y3(Y3));
 
    // You can use this counter to verify that the gap and latency are as expected.
    always @(posedge clk) begin
@@ -219,9 +218,456 @@ module dft_testbench();
    end
 endmodule
 
+// Latency: 12267
+// Gap: 11287
+// module_name_is:dft_top
+module dft_top(clk, reset, next, next_out,
+   X0, Y0,
+   X1, Y1,
+   X2, Y2,
+   X3, Y3);
+
+   output next_out;
+   input clk, reset, next;
+
+   input [11:0] X0,
+      X1,
+      X2,
+      X3;
+
+   output [11:0] Y0,
+      Y1,
+      Y2,
+      Y3;
+
+   wire [11:0] t0_0;
+   wire [11:0] t0_1;
+   wire [11:0] t0_2;
+   wire [11:0] t0_3;
+   wire next_0;
+   wire [11:0] t1_0;
+   wire [11:0] t1_1;
+   wire [11:0] t1_2;
+   wire [11:0] t1_3;
+   wire next_1;
+   wire [11:0] t2_0;
+   wire [11:0] t2_1;
+   wire [11:0] t2_2;
+   wire [11:0] t2_3;
+   wire next_2;
+   assign t0_0 = X0;
+   assign Y0 = t2_0;
+   assign t0_1 = X1;
+   assign Y1 = t2_1;
+   assign t0_2 = X2;
+   assign Y2 = t2_2;
+   assign t0_3 = X3;
+   assign Y3 = t2_3;
+   assign next_0 = next;
+   assign next_out = next_2;
+
+// latency=980, gap=1024
+   rc13253 stage0(.clk(clk), .reset(reset), .next(next_0), .next_out(next_1),
+    .X0(t0_0), .Y0(t1_0),
+    .X1(t0_1), .Y1(t1_1),
+    .X2(t0_2), .Y2(t1_2),
+    .X3(t0_3), .Y3(t1_3));
+
+
+// latency=11287, gap=11287
+   ICompose_17578 IComposeInst17805(.next(next_1), .clk(clk), .reset(reset), .next_out(next_2),
+       .X0(t1_0), .Y0(t2_0),
+       .X1(t1_1), .Y1(t2_1),
+       .X2(t1_2), .Y2(t2_2),
+       .X3(t1_3), .Y3(t2_3));
+
+
+endmodule
+
+// Latency: 980
+// Gap: 1024
+module rc13253(clk, reset, next, next_out,
+   X0, Y0,
+   X1, Y1,
+   X2, Y2,
+   X3, Y3);
+
+   output next_out;
+   input clk, reset, next;
+
+   input [11:0] X0,
+      X1,
+      X2,
+      X3;
+
+   output [11:0] Y0,
+      Y1,
+      Y2,
+      Y3;
+
+   wire [23:0] t0;
+   wire [23:0] s0;
+   assign t0 = {X0, X1};
+   wire [23:0] t1;
+   wire [23:0] s1;
+   assign t1 = {X2, X3};
+   assign Y0 = s0[23:12];
+   assign Y1 = s0[11:0];
+   assign Y2 = s1[23:12];
+   assign Y3 = s1[11:0];
+
+   perm13251 instPerm17806(.x0(t0), .y0(s0),
+    .x1(t1), .y1(s1),
+   .clk(clk), .next(next), .next_out(next_out), .reset(reset)
+);
+
+
+
+endmodule
+
+// Latency: 980
+// Gap: 1024
+module perm13251(clk, next, reset, next_out,
+   x0, y0,
+   x1, y1);
+   parameter numBanks = 2;
+   parameter logBanks = 1;
+   parameter depth = 1024;
+   parameter logDepth = 10;
+   parameter width = 24;
+
+   input [width-1:0]  x0;
+   output [width-1:0]  y0;
+   wire [width-1:0]  ybuff0;
+   input [width-1:0]  x1;
+   output [width-1:0]  y1;
+   wire [width-1:0]  ybuff1;
+   input 	      clk, next, reset;
+   output 	     next_out;
+
+   wire    	     next0;
+
+   reg              inFlip0, outFlip0;
+   reg              inActive, outActive;
+
+   wire [logBanks-1:0] inBank0, outBank0;
+   wire [logDepth-1:0] inAddr0, outAddr0;
+   wire [logBanks-1:0] outBank_a0;
+   wire [logDepth-1:0] outAddr_a0;
+   wire [logDepth+logBanks-1:0] addr0, addr0b, addr0c;
+   wire [logBanks-1:0] inBank1, outBank1;
+   wire [logDepth-1:0] inAddr1, outAddr1;
+   wire [logBanks-1:0] outBank_a1;
+   wire [logDepth-1:0] outAddr_a1;
+   wire [logDepth+logBanks-1:0] addr1, addr1b, addr1c;
+
+
+   reg [logDepth-1:0]  inCount, outCount, outCount_d, outCount_dd, outCount_for_rd_addr, outCount_for_rd_data;  
+
+   assign    addr0 = {inCount, 1'd0};
+   assign    addr0b = {outCount, 1'd0};
+   assign    addr0c = {outCount_for_rd_addr, 1'd0};
+   assign    addr1 = {inCount, 1'd1};
+   assign    addr1b = {outCount, 1'd1};
+   assign    addr1c = {outCount_for_rd_addr, 1'd1};
+    wire [width+logDepth-1:0] w_0_0, w_0_1, w_1_0, w_1_1;
+
+    reg [width-1:0] z_0_0;
+    reg [width-1:0] z_0_1;
+    wire [width-1:0] z_1_0, z_1_1;
+
+    wire [logDepth-1:0] u_0_0, u_0_1, u_1_0, u_1_1;
+
+    always @(posedge clk) begin
+    end
+
+   assign inBank0[0] = addr0[10] ^ addr0[0];
+   assign inAddr0[0] = addr0[9];
+   assign inAddr0[1] = addr0[8];
+   assign inAddr0[2] = addr0[7];
+   assign inAddr0[3] = addr0[6];
+   assign inAddr0[4] = addr0[5];
+   assign inAddr0[5] = addr0[4];
+   assign inAddr0[6] = addr0[3];
+   assign inAddr0[7] = addr0[2];
+   assign inAddr0[8] = addr0[1];
+   assign inAddr0[9] = addr0[0];
+   assign outBank0[0] = addr0b[10] ^ addr0b[0];
+   assign outAddr0[0] = addr0b[1];
+   assign outAddr0[1] = addr0b[2];
+   assign outAddr0[2] = addr0b[3];
+   assign outAddr0[3] = addr0b[4];
+   assign outAddr0[4] = addr0b[5];
+   assign outAddr0[5] = addr0b[6];
+   assign outAddr0[6] = addr0b[7];
+   assign outAddr0[7] = addr0b[8];
+   assign outAddr0[8] = addr0b[9];
+   assign outAddr0[9] = addr0b[10];
+   assign outBank_a0[0] = addr0c[10] ^ addr0c[0];
+   assign outAddr_a0[0] = addr0c[1];
+   assign outAddr_a0[1] = addr0c[2];
+   assign outAddr_a0[2] = addr0c[3];
+   assign outAddr_a0[3] = addr0c[4];
+   assign outAddr_a0[4] = addr0c[5];
+   assign outAddr_a0[5] = addr0c[6];
+   assign outAddr_a0[6] = addr0c[7];
+   assign outAddr_a0[7] = addr0c[8];
+   assign outAddr_a0[8] = addr0c[9];
+   assign outAddr_a0[9] = addr0c[10];
+
+   assign inBank1[0] = addr1[10] ^ addr1[0];
+   assign inAddr1[0] = addr1[9];
+   assign inAddr1[1] = addr1[8];
+   assign inAddr1[2] = addr1[7];
+   assign inAddr1[3] = addr1[6];
+   assign inAddr1[4] = addr1[5];
+   assign inAddr1[5] = addr1[4];
+   assign inAddr1[6] = addr1[3];
+   assign inAddr1[7] = addr1[2];
+   assign inAddr1[8] = addr1[1];
+   assign inAddr1[9] = addr1[0];
+   assign outBank1[0] = addr1b[10] ^ addr1b[0];
+   assign outAddr1[0] = addr1b[1];
+   assign outAddr1[1] = addr1b[2];
+   assign outAddr1[2] = addr1b[3];
+   assign outAddr1[3] = addr1b[4];
+   assign outAddr1[4] = addr1b[5];
+   assign outAddr1[5] = addr1b[6];
+   assign outAddr1[6] = addr1b[7];
+   assign outAddr1[7] = addr1b[8];
+   assign outAddr1[8] = addr1b[9];
+   assign outAddr1[9] = addr1b[10];
+   assign outBank_a1[0] = addr1c[10] ^ addr1c[0];
+   assign outAddr_a1[0] = addr1c[1];
+   assign outAddr_a1[1] = addr1c[2];
+   assign outAddr_a1[2] = addr1c[3];
+   assign outAddr_a1[3] = addr1c[4];
+   assign outAddr_a1[4] = addr1c[5];
+   assign outAddr_a1[5] = addr1c[6];
+   assign outAddr_a1[6] = addr1c[7];
+   assign outAddr_a1[7] = addr1c[8];
+   assign outAddr_a1[8] = addr1c[9];
+   assign outAddr_a1[9] = addr1c[10];
+
+   nextReg #(978, 10) nextReg_17811(.X(next), .Y(next0), .reset(reset), .clk(clk));
+
+
+   shiftRegFIFO #(2, 1) shiftFIFO_17814(.X(next0), .Y(next_out), .clk(clk));
+
+
+   memArray2048_13251 #(numBanks, logBanks, depth, logDepth, width)
+     memSys(.inFlip(inFlip0), .outFlip(outFlip0), .next(next), .reset(reset),
+        .x0(w_1_0[width+logDepth-1:logDepth]), .y0(ybuff0),
+        .inAddr0(w_1_0[logDepth-1:0]),
+        .outAddr0(u_1_0), 
+        .x1(w_1_1[width+logDepth-1:logDepth]), .y1(ybuff1),
+        .inAddr1(w_1_1[logDepth-1:0]),
+        .outAddr1(u_1_1), 
+        .clk(clk));
+
+   always @(posedge clk) begin
+      if (reset == 1) begin
+      z_0_0 <= 0;
+      z_0_1 <= 0;
+         inFlip0 <= 0; outFlip0 <= 1; outCount <= 0; inCount <= 0;
+        outCount_for_rd_addr <= 0;
+        outCount_for_rd_data <= 0;
+      end
+      else begin
+          outCount_d <= outCount;
+          outCount_dd <= outCount_d;
+         if (inCount == 977)
+            outCount_for_rd_addr <= 0;
+         else
+            outCount_for_rd_addr <= outCount_for_rd_addr+1;
+         if (inCount == 979)
+            outCount_for_rd_data <= 0;
+         else
+            outCount_for_rd_data <= outCount_for_rd_data+1;
+      z_0_0 <= ybuff0;
+      z_0_1 <= ybuff1;
+         if (inCount == 977) begin
+            outFlip0 <= ~outFlip0;
+            outCount <= 0;
+         end
+         else
+            outCount <= outCount+1;
+         if (inCount == 1023) begin
+            inFlip0 <= ~inFlip0;
+         end
+         if (next == 1) begin
+            if (inCount >= 977)
+               inFlip0 <= ~inFlip0;
+            inCount <= 0;
+         end
+         else
+            inCount <= inCount + 1;
+      end
+   end
+    assign w_0_0 = {x0, inAddr0};
+    assign w_0_1 = {x1, inAddr1};
+    assign y0 = z_1_0;
+    assign y1 = z_1_1;
+    assign u_0_0 = outAddr_a0;
+    assign u_0_1 = outAddr_a1;
+    wire wr_ctrl_st_0;
+    assign wr_ctrl_st_0 = inCount[9];
+
+    switch #(logDepth+width) in_sw_0_0(.x0(w_0_0), .x1(w_0_1), .y0(w_1_0), .y1(w_1_1), .ctrl(wr_ctrl_st_0));
+    wire rdd_ctrl_st_0;
+    assign rdd_ctrl_st_0 = outCount_for_rd_data[9];
+
+    switch #(width) out_sw_0_0(.x0(z_0_0), .x1(z_0_1), .y0(z_1_0), .y1(z_1_1), .ctrl(rdd_ctrl_st_0));
+    wire rda_ctrl_st_0;
+    assign rda_ctrl_st_0 = outCount_for_rd_addr[9];
+
+    switch #(logDepth) rdaddr_sw_0_0(.x0(u_0_0), .x1(u_0_1), .y0(u_1_0), .y1(u_1_1), .ctrl(rda_ctrl_st_0));
+endmodule
+
+module memArray2048_13251(next, reset,
+                x0, y0,
+                inAddr0,
+                outAddr0,
+                x1, y1,
+                inAddr1,
+                outAddr1,
+                clk, inFlip, outFlip);
+
+   parameter numBanks = 2;
+   parameter logBanks = 1;
+   parameter depth = 1024;
+   parameter logDepth = 10;
+   parameter width = 24;
+         
+   input     clk, next, reset;
+   input    inFlip, outFlip;
+   wire    next0;
+   
+   input [width-1:0]   x0;
+   output [width-1:0]  y0;
+   input [logDepth-1:0] inAddr0, outAddr0;
+   input [width-1:0]   x1;
+   output [width-1:0]  y1;
+   input [logDepth-1:0] inAddr1, outAddr1;
+   nextReg #(1024, 10) nextReg_17819(.X(next), .Y(next0), .reset(reset), .clk(clk));
+
+
+   memMod #(depth*2, width, logDepth+1) 
+     memMod0(.in(x0), .out(y0), .inAddr({inFlip, inAddr0}),
+	   .outAddr({outFlip, outAddr0}), .writeSel(1'b1), .clk(clk));   
+   memMod #(depth*2, width, logDepth+1) 
+     memMod1(.in(x1), .out(y1), .inAddr({inFlip, inAddr1}),
+	   .outAddr({outFlip, outAddr1}), .writeSel(1'b1), .clk(clk));   
+endmodule
+
+module nextReg(X, Y, reset, clk);
+   parameter depth=2, logDepth=1;
+
+   output Y;
+   input X;
+   input              clk, reset;
+   reg [logDepth:0] count;
+   reg                active;
+
+   assign Y = (count == depth) ? 1 : 0;
+
+   always @ (posedge clk) begin
+      if (reset == 1) begin
+         count <= 0;
+         active <= 0;
+      end
+      else if (X == 1) begin
+         active <= 1;
+         count <= 1;
+      end
+      else if (count == depth) begin
+         count <= 0;
+         active <= 0;
+      end
+      else if (active)
+         count <= count+1;
+   end
+endmodule
+
+
+module memMod(in, out, inAddr, outAddr, writeSel, clk);
+   
+   parameter depth=1024, width=16, logDepth=10;
+   
+   input [width-1:0]    in;
+   input [logDepth-1:0] inAddr, outAddr;
+   input 	        writeSel, clk;
+   output [width-1:0] 	out;
+   reg [width-1:0] 	out;
+   
+   // synthesis attribute ram_style of mem is block
+
+   reg [width-1:0] 	mem[depth-1:0]; 
+   
+   always @(posedge clk) begin
+      out <= mem[outAddr];
+      
+      if (writeSel)
+        mem[inAddr] <= in;
+   end
+endmodule 
+
+
+
+module memMod_dist(in, out, inAddr, outAddr, writeSel, clk);
+   
+   parameter depth=1024, width=16, logDepth=10;
+   
+   input [width-1:0]    in;
+   input [logDepth-1:0] inAddr, outAddr;
+   input 	        writeSel, clk;
+   output [width-1:0] 	out;
+   reg [width-1:0] 	out;
+   
+   // synthesis attribute ram_style of mem is distributed
+
+   reg [width-1:0] 	mem[depth-1:0]; 
+   
+   always @(posedge clk) begin
+      out <= mem[outAddr];
+      
+      if (writeSel)
+        mem[inAddr] <= in;
+   end
+endmodule 
+
+module switch(ctrl, x0, x1, y0, y1);
+    parameter width = 16;
+    input [width-1:0] x0, x1;
+    output [width-1:0] y0, y1;
+    input ctrl;
+    assign y0 = (ctrl == 0) ? x0 : x1;
+    assign y1 = (ctrl == 0) ? x1 : x0;
+endmodule
+
+module shiftRegFIFO(X, Y, clk);
+   parameter depth=1, width=1;
+
+   output [width-1:0] Y;
+   input  [width-1:0] X;
+   input              clk;
+
+   reg [width-1:0]    mem [depth-1:0];
+   integer            index;
+
+   assign Y = mem[depth-1];
+
+   always @ (posedge clk) begin
+      for(index=1;index<depth;index=index+1) begin
+         mem[index] <= mem[index-1];
+      end
+      mem[0]<=X;
+   end
+endmodule
+
 // Latency: 11287
 // Gap: 11287
-module ICompose_71024(clk, reset, next, next_out,
+module ICompose_17578(clk, reset, next, next_out,
       X0, Y0,
       X1, Y1,
       X2, Y2,
@@ -264,7 +710,7 @@ module ICompose_71024(clk, reset, next, next_out,
    wire int_next_out;
    reg [4:0] i1;
 
-   statementList71022 instList71246 (.clk(clk), .reset(reset), .next(int_next), .next_out(int_next_out),
+   statementList17576 instList17824 (.clk(clk), .reset(reset), .next(int_next), .next_out(int_next_out),
       .i1_in(i1),
     .X0(s0), .Y0(t0),
     .X1(s1), .Y1(t1),
@@ -383,8 +829,8 @@ endmodule
 
 // Latency: 1025
 // Gap: 1024
-// module_name_is:statementList71022
-module statementList71022(clk, reset, next, next_out,
+// module_name_is:statementList17576
+module statementList17576(clk, reset, next, next_out,
    i1_in,
    X0, Y0,
    X1, Y1,
@@ -438,480 +884,38 @@ module statementList71022(clk, reset, next, next_out,
    assign next_0 = next;
    assign next_out = next_3;
 
-   shiftRegFIFO #(1014, 5) shiftFIFO_71249(.X(i1_in), .Y(i1_0), .clk(clk));
+   assign i1_0 = i1_in;
 
-// latency=1012, gap=1024
-   rc66689 instrc71250(.clk(clk), .reset(reset), .next(next_0), .next_out(next_1),
-    .X0(t0_0), .Y0(t1_0),
-    .X1(t0_1), .Y1(t1_1),
-    .X2(t0_2), .Y2(t1_2),
-    .X3(t0_3), .Y3(t1_3));
+// latency=11, gap=1024
+   DirSum_17491 DirSumInst17827(.next(next_0), .clk(clk), .reset(reset), .next_out(next_1),
+.i1(i1_0),
+       .X0(t0_0), .Y0(t1_0),
+       .X1(t0_1), .Y1(t1_1),
+       .X2(t0_2), .Y2(t1_2),
+       .X3(t0_3), .Y3(t1_3));
 
 
 // latency=2, gap=1024
-   codeBlock66691 codeBlockIsnt71251(.clk(clk), .reset(reset), .next_in(next_1), .next_out(next_2),
+   codeBlock17493 codeBlockIsnt17828(.clk(clk), .reset(reset), .next_in(next_1), .next_out(next_2),
        .X0_in(t1_0), .Y0(t2_0),
        .X1_in(t1_1), .Y1(t2_1),
        .X2_in(t1_2), .Y2(t2_2),
        .X3_in(t1_3), .Y3(t2_3));
 
 
-// latency=11, gap=1024
-   DirSum_71020 DirSumInst71252(.next(next_2), .clk(clk), .reset(reset), .next_out(next_3),
-.i1(i1_0),
-       .X0(t2_0), .Y0(t3_0),
-       .X1(t2_1), .Y1(t3_1),
-       .X2(t2_2), .Y2(t3_2),
-       .X3(t2_3), .Y3(t3_3));
+// latency=1012, gap=1024
+   rc17574 instrc17829(.clk(clk), .reset(reset), .next(next_2), .next_out(next_3),
+    .X0(t2_0), .Y0(t3_0),
+    .X1(t2_1), .Y1(t3_1),
+    .X2(t2_2), .Y2(t3_2),
+    .X3(t2_3), .Y3(t3_3));
 
 
-endmodule
-
-// Latency: 1012
-// Gap: 1024
-module rc66689(clk, reset, next, next_out,
-   X0, Y0,
-   X1, Y1,
-   X2, Y2,
-   X3, Y3);
-
-   output next_out;
-   input clk, reset, next;
-
-   input [11:0] X0,
-      X1,
-      X2,
-      X3;
-
-   output [11:0] Y0,
-      Y1,
-      Y2,
-      Y3;
-
-   wire [23:0] t0;
-   wire [23:0] s0;
-   assign t0 = {X0, X1};
-   wire [23:0] t1;
-   wire [23:0] s1;
-   assign t1 = {X2, X3};
-   assign Y0 = s0[23:12];
-   assign Y1 = s0[11:0];
-   assign Y2 = s1[23:12];
-   assign Y3 = s1[11:0];
-
-   perm66687 instPerm71253(.x0(t0), .y0(s0),
-    .x1(t1), .y1(s1),
-   .clk(clk), .next(next), .next_out(next_out), .reset(reset)
-);
-
-
-
-endmodule
-
-// Latency: 1012
-// Gap: 1024
-module perm66687(clk, next, reset, next_out,
-   x0, y0,
-   x1, y1);
-   parameter numBanks = 2;
-   parameter logBanks = 1;
-   parameter depth = 1024;
-   parameter logDepth = 10;
-   parameter width = 24;
-
-   input [width-1:0]  x0;
-   output [width-1:0]  y0;
-   wire [width-1:0]  ybuff0;
-   input [width-1:0]  x1;
-   output [width-1:0]  y1;
-   wire [width-1:0]  ybuff1;
-   input 	      clk, next, reset;
-   output 	     next_out;
-
-   wire    	     next0;
-
-   reg              inFlip0, outFlip0;
-   reg              inActive, outActive;
-
-   wire [logBanks-1:0] inBank0, outBank0;
-   wire [logDepth-1:0] inAddr0, outAddr0;
-   wire [logBanks-1:0] outBank_a0;
-   wire [logDepth-1:0] outAddr_a0;
-   wire [logDepth+logBanks-1:0] addr0, addr0b, addr0c;
-   wire [logBanks-1:0] inBank1, outBank1;
-   wire [logDepth-1:0] inAddr1, outAddr1;
-   wire [logBanks-1:0] outBank_a1;
-   wire [logDepth-1:0] outAddr_a1;
-   wire [logDepth+logBanks-1:0] addr1, addr1b, addr1c;
-
-
-   reg [logDepth-1:0]  inCount, outCount, outCount_d, outCount_dd, outCount_for_rd_addr, outCount_for_rd_data;  
-
-   assign    addr0 = {inCount, 1'd0};
-   assign    addr0b = {outCount, 1'd0};
-   assign    addr0c = {outCount_for_rd_addr, 1'd0};
-   assign    addr1 = {inCount, 1'd1};
-   assign    addr1b = {outCount, 1'd1};
-   assign    addr1c = {outCount_for_rd_addr, 1'd1};
-    wire [width+logDepth-1:0] w_0_0, w_0_1, w_1_0, w_1_1;
-
-    reg [width-1:0] z_0_0;
-    reg [width-1:0] z_0_1;
-    wire [width-1:0] z_1_0, z_1_1;
-
-    wire [logDepth-1:0] u_0_0, u_0_1, u_1_0, u_1_1;
-
-    always @(posedge clk) begin
-    end
-
-   assign inBank0[0] = addr0[10] ^ addr0[0];
-   assign inAddr0[0] = addr0[0];
-   assign inAddr0[1] = addr0[1];
-   assign inAddr0[2] = addr0[2];
-   assign inAddr0[3] = addr0[3];
-   assign inAddr0[4] = addr0[4];
-   assign inAddr0[5] = addr0[5];
-   assign inAddr0[6] = addr0[6];
-   assign inAddr0[7] = addr0[7];
-   assign inAddr0[8] = addr0[8];
-   assign inAddr0[9] = addr0[9];
-   assign outBank0[0] = addr0b[1] ^ addr0b[0];
-   assign outAddr0[0] = addr0b[1];
-   assign outAddr0[1] = addr0b[2];
-   assign outAddr0[2] = addr0b[3];
-   assign outAddr0[3] = addr0b[4];
-   assign outAddr0[4] = addr0b[5];
-   assign outAddr0[5] = addr0b[6];
-   assign outAddr0[6] = addr0b[7];
-   assign outAddr0[7] = addr0b[8];
-   assign outAddr0[8] = addr0b[9];
-   assign outAddr0[9] = addr0b[10];
-   assign outBank_a0[0] = addr0c[1] ^ addr0c[0];
-   assign outAddr_a0[0] = addr0c[1];
-   assign outAddr_a0[1] = addr0c[2];
-   assign outAddr_a0[2] = addr0c[3];
-   assign outAddr_a0[3] = addr0c[4];
-   assign outAddr_a0[4] = addr0c[5];
-   assign outAddr_a0[5] = addr0c[6];
-   assign outAddr_a0[6] = addr0c[7];
-   assign outAddr_a0[7] = addr0c[8];
-   assign outAddr_a0[8] = addr0c[9];
-   assign outAddr_a0[9] = addr0c[10];
-
-   assign inBank1[0] = addr1[10] ^ addr1[0];
-   assign inAddr1[0] = addr1[0];
-   assign inAddr1[1] = addr1[1];
-   assign inAddr1[2] = addr1[2];
-   assign inAddr1[3] = addr1[3];
-   assign inAddr1[4] = addr1[4];
-   assign inAddr1[5] = addr1[5];
-   assign inAddr1[6] = addr1[6];
-   assign inAddr1[7] = addr1[7];
-   assign inAddr1[8] = addr1[8];
-   assign inAddr1[9] = addr1[9];
-   assign outBank1[0] = addr1b[1] ^ addr1b[0];
-   assign outAddr1[0] = addr1b[1];
-   assign outAddr1[1] = addr1b[2];
-   assign outAddr1[2] = addr1b[3];
-   assign outAddr1[3] = addr1b[4];
-   assign outAddr1[4] = addr1b[5];
-   assign outAddr1[5] = addr1b[6];
-   assign outAddr1[6] = addr1b[7];
-   assign outAddr1[7] = addr1b[8];
-   assign outAddr1[8] = addr1b[9];
-   assign outAddr1[9] = addr1b[10];
-   assign outBank_a1[0] = addr1c[1] ^ addr1c[0];
-   assign outAddr_a1[0] = addr1c[1];
-   assign outAddr_a1[1] = addr1c[2];
-   assign outAddr_a1[2] = addr1c[3];
-   assign outAddr_a1[3] = addr1c[4];
-   assign outAddr_a1[4] = addr1c[5];
-   assign outAddr_a1[5] = addr1c[6];
-   assign outAddr_a1[6] = addr1c[7];
-   assign outAddr_a1[7] = addr1c[8];
-   assign outAddr_a1[8] = addr1c[9];
-   assign outAddr_a1[9] = addr1c[10];
-
-   nextReg #(1010, 10) nextReg_71258(.X(next), .Y(next0), .reset(reset), .clk(clk));
-
-
-   shiftRegFIFO #(2, 1) shiftFIFO_71261(.X(next0), .Y(next_out), .clk(clk));
-
-
-   memArray2048_66687 #(numBanks, logBanks, depth, logDepth, width)
-     memSys(.inFlip(inFlip0), .outFlip(outFlip0), .next(next), .reset(reset),
-        .x0(w_1_0[width+logDepth-1:logDepth]), .y0(ybuff0),
-        .inAddr0(w_1_0[logDepth-1:0]),
-        .outAddr0(u_1_0), 
-        .x1(w_1_1[width+logDepth-1:logDepth]), .y1(ybuff1),
-        .inAddr1(w_1_1[logDepth-1:0]),
-        .outAddr1(u_1_1), 
-        .clk(clk));
-
-   always @(posedge clk) begin
-      if (reset == 1) begin
-      z_0_0 <= 0;
-      z_0_1 <= 0;
-         inFlip0 <= 0; outFlip0 <= 1; outCount <= 0; inCount <= 0;
-        outCount_for_rd_addr <= 0;
-        outCount_for_rd_data <= 0;
-      end
-      else begin
-          outCount_d <= outCount;
-          outCount_dd <= outCount_d;
-         if (inCount == 1009)
-            outCount_for_rd_addr <= 0;
-         else
-            outCount_for_rd_addr <= outCount_for_rd_addr+1;
-         if (inCount == 1011)
-            outCount_for_rd_data <= 0;
-         else
-            outCount_for_rd_data <= outCount_for_rd_data+1;
-      z_0_0 <= ybuff0;
-      z_0_1 <= ybuff1;
-         if (inCount == 1009) begin
-            outFlip0 <= ~outFlip0;
-            outCount <= 0;
-         end
-         else
-            outCount <= outCount+1;
-         if (inCount == 1023) begin
-            inFlip0 <= ~inFlip0;
-         end
-         if (next == 1) begin
-            if (inCount >= 1009)
-               inFlip0 <= ~inFlip0;
-            inCount <= 0;
-         end
-         else
-            inCount <= inCount + 1;
-      end
-   end
-    assign w_0_0 = {x0, inAddr0};
-    assign w_0_1 = {x1, inAddr1};
-    assign y0 = z_1_0;
-    assign y1 = z_1_1;
-    assign u_0_0 = outAddr_a0;
-    assign u_0_1 = outAddr_a1;
-    wire wr_ctrl_st_0;
-    assign wr_ctrl_st_0 = inCount[9];
-
-    switch #(logDepth+width) in_sw_0_0(.x0(w_0_0), .x1(w_0_1), .y0(w_1_0), .y1(w_1_1), .ctrl(wr_ctrl_st_0));
-    wire rdd_ctrl_st_0;
-    assign rdd_ctrl_st_0 = outCount_for_rd_data[0];
-
-    switch #(width) out_sw_0_0(.x0(z_0_0), .x1(z_0_1), .y0(z_1_0), .y1(z_1_1), .ctrl(rdd_ctrl_st_0));
-    wire rda_ctrl_st_0;
-    assign rda_ctrl_st_0 = outCount_for_rd_addr[0];
-
-    switch #(logDepth) rdaddr_sw_0_0(.x0(u_0_0), .x1(u_0_1), .y0(u_1_0), .y1(u_1_1), .ctrl(rda_ctrl_st_0));
-endmodule
-
-module memArray2048_66687(next, reset,
-                x0, y0,
-                inAddr0,
-                outAddr0,
-                x1, y1,
-                inAddr1,
-                outAddr1,
-                clk, inFlip, outFlip);
-
-   parameter numBanks = 2;
-   parameter logBanks = 1;
-   parameter depth = 1024;
-   parameter logDepth = 10;
-   parameter width = 24;
-         
-   input     clk, next, reset;
-   input    inFlip, outFlip;
-   wire    next0;
-   
-   input [width-1:0]   x0;
-   output [width-1:0]  y0;
-   input [logDepth-1:0] inAddr0, outAddr0;
-   input [width-1:0]   x1;
-   output [width-1:0]  y1;
-   input [logDepth-1:0] inAddr1, outAddr1;
-   nextReg #(1024, 10) nextReg_71266(.X(next), .Y(next0), .reset(reset), .clk(clk));
-
-
-   memMod #(depth*2, width, logDepth+1) 
-     memMod0(.in(x0), .out(y0), .inAddr({inFlip, inAddr0}),
-	   .outAddr({outFlip, outAddr0}), .writeSel(1'b1), .clk(clk));   
-   memMod #(depth*2, width, logDepth+1) 
-     memMod1(.in(x1), .out(y1), .inAddr({inFlip, inAddr1}),
-	   .outAddr({outFlip, outAddr1}), .writeSel(1'b1), .clk(clk));   
-endmodule
-
-module nextReg(X, Y, reset, clk);
-   parameter depth=2, logDepth=1;
-
-   output Y;
-   input X;
-   input              clk, reset;
-   reg [logDepth:0] count;
-   reg                active;
-
-   assign Y = (count == depth) ? 1 : 0;
-
-   always @ (posedge clk) begin
-      if (reset == 1) begin
-         count <= 0;
-         active <= 0;
-      end
-      else if (X == 1) begin
-         active <= 1;
-         count <= 1;
-      end
-      else if (count == depth) begin
-         count <= 0;
-         active <= 0;
-      end
-      else if (active)
-         count <= count+1;
-   end
-endmodule
-
-
-module memMod(in, out, inAddr, outAddr, writeSel, clk);
-   
-   parameter depth=1024, width=16, logDepth=10;
-   
-   input [width-1:0]    in;
-   input [logDepth-1:0] inAddr, outAddr;
-   input 	        writeSel, clk;
-   output [width-1:0] 	out;
-   reg [width-1:0] 	out;
-   
-   // synthesis attribute ram_style of mem is block
-
-   reg [width-1:0] 	mem[depth-1:0]; 
-   
-   always @(posedge clk) begin
-      out <= mem[outAddr];
-      
-      if (writeSel)
-        mem[inAddr] <= in;
-   end
-endmodule 
-
-
-
-module memMod_dist(in, out, inAddr, outAddr, writeSel, clk);
-   
-   parameter depth=1024, width=16, logDepth=10;
-   
-   input [width-1:0]    in;
-   input [logDepth-1:0] inAddr, outAddr;
-   input 	        writeSel, clk;
-   output [width-1:0] 	out;
-   reg [width-1:0] 	out;
-   
-   // synthesis attribute ram_style of mem is distributed
-
-   reg [width-1:0] 	mem[depth-1:0]; 
-   
-   always @(posedge clk) begin
-      out <= mem[outAddr];
-      
-      if (writeSel)
-        mem[inAddr] <= in;
-   end
-endmodule 
-
-module switch(ctrl, x0, x1, y0, y1);
-    parameter width = 16;
-    input [width-1:0] x0, x1;
-    output [width-1:0] y0, y1;
-    input ctrl;
-    assign y0 = (ctrl == 0) ? x0 : x1;
-    assign y1 = (ctrl == 0) ? x1 : x0;
-endmodule
-
-// Latency: 2
-// Gap: 1
-module codeBlock66691(clk, reset, next_in, next_out,
-   X0_in, Y0,
-   X1_in, Y1,
-   X2_in, Y2,
-   X3_in, Y3);
-
-   output next_out;
-   input clk, reset, next_in;
-
-   reg next;
-
-   input [11:0] X0_in,
-      X1_in,
-      X2_in,
-      X3_in;
-
-   reg   [11:0] X0,
-      X1,
-      X2,
-      X3;
-
-   output [11:0] Y0,
-      Y1,
-      Y2,
-      Y3;
-
-   shiftRegFIFO #(1, 1) shiftFIFO_71273(.X(next), .Y(next_out), .clk(clk));
-
-
-   wire signed [11:0] a76;
-   wire signed [11:0] a77;
-   wire signed [11:0] a78;
-   wire signed [11:0] a79;
-   wire signed [12:0] tm12;
-   wire signed [12:0] tm13;
-   wire signed [12:0] tm14;
-   wire signed [12:0] tm15;
-   wire signed [11:0] Y0;
-   wire signed [11:0] Y1;
-   wire signed [11:0] Y2;
-   wire signed [11:0] Y3;
-   wire signed [11:0] t21;
-   wire signed [11:0] t22;
-   wire signed [11:0] t23;
-   wire signed [11:0] t24;
-
-
-   assign a76 = X0;
-   assign a77 = X2;
-   assign a78 = X1;
-   assign a79 = X3;
-   assign Y0 = t21;
-   assign Y1 = t22;
-   assign Y2 = t23;
-   assign Y3 = t24;
-   assign t21 = tm12[12:1];
-   assign t22 = tm13[12:1];
-   assign t23 = tm14[12:1];
-   assign t24 = tm15[12:1];
-
-    addfxp #(13, 1) add66703(.a({{1{a76[11]}}, a76}), .b({{1{a77[11]}}, a77}), .clk(clk), .q(tm12));    // 0
-    addfxp #(13, 1) add66718(.a({{1{a78[11]}}, a78}), .b({{1{a79[11]}}, a79}), .clk(clk), .q(tm13));    // 0
-    subfxp #(13, 1) sub66733(.a({{1{a76[11]}}, a76}), .b({{1{a77[11]}}, a77}), .clk(clk), .q(tm14));    // 0
-    subfxp #(13, 1) sub66748(.a({{1{a78[11]}}, a78}), .b({{1{a79[11]}}, a79}), .clk(clk), .q(tm15));    // 0
-
-
-   always @(posedge clk) begin
-      if (reset == 1) begin
-      end
-      else begin
-         X0 <= X0_in;
-         X1 <= X1_in;
-         X2 <= X2_in;
-         X3 <= X3_in;
-         next <= next_in;
-      end
-   end
 endmodule
 
 // Latency: 11
 // Gap: 1024
-module DirSum_71020(clk, reset, next, next_out,
+module DirSum_17491(clk, reset, next, next_out,
       i1,
       X0, Y0,
       X1, Y1,
@@ -922,7 +926,7 @@ module DirSum_71020(clk, reset, next, next_out,
    input clk, reset, next;
 
    input [4:0] i1;
-   reg [9:0] i3;
+   reg [9:0] i2;
 
    input [11:0] X0,
       X1,
@@ -936,20 +940,20 @@ module DirSum_71020(clk, reset, next, next_out,
 
    always @(posedge clk) begin
       if (reset == 1) begin
-         i3 <= 0;
+         i2 <= 0;
       end
       else begin
          if (next == 1)
-            i3 <= 0;
-         else if (i3 == 1023)
-            i3 <= 0;
+            i2 <= 0;
+         else if (i2 == 1023)
+            i2 <= 0;
          else
-            i3 <= i3 + 1;
+            i2 <= i2 + 1;
       end
    end
 
-   codeBlock66770 codeBlockIsnt71274(.clk(clk), .reset(reset), .next_in(next), .next_out(next_out),
-.i3_in(i3),
+   codeBlock13255 codeBlockIsnt17830(.clk(clk), .reset(reset), .next_in(next), .next_out(next_out),
+.i2_in(i2),
 .i1_in(i1),
        .X0_in(X0), .Y0(Y0),
        .X1_in(X1), .Y1(Y1),
@@ -958,7 +962,7 @@ module DirSum_71020(clk, reset, next, next_out,
 
 endmodule
 
-module D1_68968(addr, out, clk);
+module D1_15439(addr, out, clk);
    input clk;
    output [11:0] out;
    reg [11:0] out, out2, out3;
@@ -3024,7 +3028,7 @@ endmodule
 
 
 
-module D2_71018(addr, out, clk);
+module D2_17489(addr, out, clk);
    input clk;
    output [11:0] out;
    reg [11:0] out, out2, out3;
@@ -5092,8 +5096,8 @@ endmodule
 
 // Latency: 11
 // Gap: 1
-module codeBlock66770(clk, reset, next_in, next_out,
-   i3_in,
+module codeBlock13255(clk, reset, next_in, next_out,
+   i2_in,
    i1_in,
    X0_in, Y0,
    X1_in, Y1,
@@ -5104,8 +5108,8 @@ module codeBlock66770(clk, reset, next_in, next_out,
    input clk, reset, next_in;
 
    reg next;
-   input [9:0] i3_in;
-   reg [9:0] i3;
+   input [9:0] i2_in;
+   reg [9:0] i2;
    input [4:0] i1_in;
    reg [4:0] i1;
 
@@ -5124,27 +5128,27 @@ module codeBlock66770(clk, reset, next_in, next_out,
       Y2,
       Y3;
 
-   shiftRegFIFO #(10, 1) shiftFIFO_71277(.X(next), .Y(next_out), .clk(clk));
+   shiftRegFIFO #(10, 1) shiftFIFO_17833(.X(next), .Y(next_out), .clk(clk));
 
 
-   wire  [10:0] a49;
-   wire signed [11:0] a64;
-   wire signed [11:0] a65;
-   wire  [11:0] a50;
-   wire  [5:0] a52;
-   wire  [9:0] a53;
-   wire  [10:0] a54;
+   wire  [10:0] a57;
+   wire  [9:0] a59;
+   wire  [10:0] a60;
+   wire signed [11:0] a70;
+   wire signed [11:0] a71;
+   wire  [11:0] a58;
+   reg  [10:0] tm15;
    reg signed [11:0] tm16;
    reg signed [11:0] tm23;
    reg signed [11:0] tm44;
    reg signed [11:0] tm54;
-   reg  [11:0] a55;
-   wire  [10:0] a56;
+   reg  [11:0] a61;
+   wire  [10:0] a62;
    reg signed [11:0] tm17;
    reg signed [11:0] tm24;
    reg signed [11:0] tm45;
    reg signed [11:0] tm55;
-   wire  [11:0] a57;
+   wire  [11:0] a63;
    reg signed [11:0] tm18;
    reg signed [11:0] tm25;
    reg signed [11:0] tm46;
@@ -5157,26 +5161,26 @@ module codeBlock66770(clk, reset, next_in, next_out,
    reg signed [11:0] tm27;
    reg signed [11:0] tm48;
    reg signed [11:0] tm58;
+   wire signed [11:0] tm5;
+   wire signed [11:0] a64;
    wire signed [11:0] tm6;
-   wire signed [11:0] a58;
-   wire signed [11:0] tm7;
-   wire signed [11:0] a60;
+   wire signed [11:0] a66;
    reg signed [11:0] tm21;
    reg signed [11:0] tm28;
    reg signed [11:0] tm49;
    reg signed [11:0] tm59;
+   reg signed [11:0] tm7;
    reg signed [11:0] tm8;
-   reg signed [11:0] tm9;
    reg signed [11:0] tm22;
    reg signed [11:0] tm29;
    reg signed [11:0] tm50;
    reg signed [11:0] tm60;
    reg signed [11:0] tm51;
    reg signed [11:0] tm61;
-   wire signed [11:0] a59;
-   wire signed [11:0] a61;
-   wire signed [11:0] a62;
-   wire signed [11:0] a63;
+   wire signed [11:0] a65;
+   wire signed [11:0] a67;
+   wire signed [11:0] a68;
+   wire signed [11:0] a69;
    reg signed [11:0] tm52;
    reg signed [11:0] tm62;
    wire signed [11:0] Y0;
@@ -5188,63 +5192,61 @@ module codeBlock66770(clk, reset, next_in, next_out,
 
    wire [0:0] tm1;
    assign tm1 = 1'h1;
-   wire [3:0] tm2;
-   assign tm2 = 4'ha;
-   wire [9:0] tm3;
-   assign tm3 = 10'h3ff;
-   wire [10:0] tm5;
-   assign tm5 = 11'h400;
+   wire [9:0] tm2;
+   assign tm2 = 10'h3ff;
+   wire [10:0] tm4;
+   assign tm4 = 11'h400;
 
-   assign a49 = i3 << 1;
-   assign a64 = X2;
-   assign a65 = X3;
-   assign a53 = tm3 << a52;
-   assign a54 = {a53, tm1[0:0]};
-   assign a56 = {a55[0:0], a55[10:1]};
-   assign a58 = tm6;
-   assign a60 = tm7;
+   assign a57 = i2 << 1;
+   assign a59 = tm2 << i1;
+   assign a60 = {a59, tm1[0:0]};
+   assign a70 = X2;
+   assign a71 = X3;
+   assign a62 = {a61[0:0], a61[10:1]};
+   assign a64 = tm5;
+   assign a66 = tm6;
    assign Y0 = tm53;
    assign Y1 = tm63;
 
-   D1_68968 instD1inst0_68968(.addr(a57[10:0]), .out(tm6), .clk(clk));
+   D1_15439 instD1inst0_15439(.addr(a63[10:0]), .out(tm5), .clk(clk));
 
-   D2_71018 instD2inst0_71018(.addr(a57[10:0]), .out(tm7), .clk(clk));
+   D2_17489 instD2inst0_17489(.addr(a63[10:0]), .out(tm6), .clk(clk));
 
-    addfxp #(12, 1) add66789(.a({1'b0, a49}), .b({11'b0, tm1}), .clk(clk), .q(a50));    // 0
-    subfxp #(6, 1) sub66803(.a({2'b0, tm2}), .b({1'b0, i1}), .clk(clk), .q(a52));    // 0
-    subfxp #(12, 1) sub66835(.a({1'b0, a56}), .b({1'b0, tm5}), .clk(clk), .q(a57));    // 2
-    multfix #(12, 2) m66857(.a(tm8), .b(tm22), .clk(clk), .q_sc(a59), .q_unsc(), .rst(reset));
-    multfix #(12, 2) m66879(.a(tm9), .b(tm29), .clk(clk), .q_sc(a61), .q_unsc(), .rst(reset));
-    multfix #(12, 2) m66897(.a(tm9), .b(tm22), .clk(clk), .q_sc(a62), .q_unsc(), .rst(reset));
-    multfix #(12, 2) m66908(.a(tm8), .b(tm29), .clk(clk), .q_sc(a63), .q_unsc(), .rst(reset));
-    subfxp #(12, 1) sub66886(.a(a59), .b(a61), .clk(clk), .q(Y2));    // 9
-    addfxp #(12, 1) add66915(.a(a62), .b(a63), .clk(clk), .q(Y3));    // 9
+    addfxp #(12, 1) add13274(.a({1'b0, a57}), .b({11'b0, tm1}), .clk(clk), .q(a58));    // 0
+    subfxp #(12, 1) sub13306(.a({1'b0, a62}), .b({1'b0, tm4}), .clk(clk), .q(a63));    // 2
+    multfix #(12, 2) m13328(.a(tm7), .b(tm22), .clk(clk), .q_sc(a65), .q_unsc(), .rst(reset));
+    multfix #(12, 2) m13350(.a(tm8), .b(tm29), .clk(clk), .q_sc(a67), .q_unsc(), .rst(reset));
+    multfix #(12, 2) m13368(.a(tm8), .b(tm22), .clk(clk), .q_sc(a68), .q_unsc(), .rst(reset));
+    multfix #(12, 2) m13379(.a(tm7), .b(tm29), .clk(clk), .q_sc(a69), .q_unsc(), .rst(reset));
+    subfxp #(12, 1) sub13357(.a(a65), .b(a67), .clk(clk), .q(Y2));    // 9
+    addfxp #(12, 1) add13386(.a(a68), .b(a69), .clk(clk), .q(Y3));    // 9
 
 
    always @(posedge clk) begin
       if (reset == 1) begin
-         tm8 <= 0;
+         tm7 <= 0;
          tm22 <= 0;
-         tm9 <= 0;
+         tm8 <= 0;
          tm29 <= 0;
-         tm9 <= 0;
-         tm22 <= 0;
          tm8 <= 0;
+         tm22 <= 0;
+         tm7 <= 0;
          tm29 <= 0;
       end
       else begin
-         i3 <= i3_in;
+         i2 <= i2_in;
          i1 <= i1_in;
          X0 <= X0_in;
          X1 <= X1_in;
          X2 <= X2_in;
          X3 <= X3_in;
          next <= next_in;
-         tm16 <= a64;
-         tm23 <= a65;
+         tm15 <= a60;
+         tm16 <= a70;
+         tm23 <= a71;
          tm44 <= X0;
          tm54 <= X1;
-         a55 <= (a50 & a54);
+         a61 <= (a58 & tm15);
          tm17 <= tm16;
          tm24 <= tm23;
          tm45 <= tm44;
@@ -5265,8 +5267,8 @@ module codeBlock66770(clk, reset, next_in, next_out,
          tm28 <= tm27;
          tm49 <= tm48;
          tm59 <= tm58;
-         tm8 <= a58;
-         tm9 <= a60;
+         tm7 <= a64;
+         tm8 <= a66;
          tm22 <= tm21;
          tm29 <= tm28;
          tm50 <= tm49;
@@ -5281,25 +5283,363 @@ module codeBlock66770(clk, reset, next_in, next_out,
    end
 endmodule
 
-module shiftRegFIFO(X, Y, clk);
-   parameter depth=1, width=1;
+// Latency: 2
+// Gap: 1
+module codeBlock17493(clk, reset, next_in, next_out,
+   X0_in, Y0,
+   X1_in, Y1,
+   X2_in, Y2,
+   X3_in, Y3);
 
-   output [width-1:0] Y;
-   input  [width-1:0] X;
-   input              clk;
+   output next_out;
+   input clk, reset, next_in;
 
-   reg [width-1:0]    mem [depth-1:0];
-   integer            index;
+   reg next;
 
-   assign Y = mem[depth-1];
+   input [11:0] X0_in,
+      X1_in,
+      X2_in,
+      X3_in;
 
-   always @ (posedge clk) begin
-      for(index=1;index<depth;index=index+1) begin
-         mem[index] <= mem[index-1];
+   reg   [11:0] X0,
+      X1,
+      X2,
+      X3;
+
+   output [11:0] Y0,
+      Y1,
+      Y2,
+      Y3;
+
+   shiftRegFIFO #(1, 1) shiftFIFO_17836(.X(next), .Y(next_out), .clk(clk));
+
+
+   wire signed [11:0] a9;
+   wire signed [11:0] a10;
+   wire signed [11:0] a11;
+   wire signed [11:0] a12;
+   wire signed [12:0] tm11;
+   wire signed [12:0] tm12;
+   wire signed [12:0] tm13;
+   wire signed [12:0] tm14;
+   wire signed [11:0] Y0;
+   wire signed [11:0] Y1;
+   wire signed [11:0] Y2;
+   wire signed [11:0] Y3;
+   wire signed [11:0] t21;
+   wire signed [11:0] t22;
+   wire signed [11:0] t23;
+   wire signed [11:0] t24;
+
+
+   assign a9 = X0;
+   assign a10 = X2;
+   assign a11 = X1;
+   assign a12 = X3;
+   assign Y0 = t21;
+   assign Y1 = t22;
+   assign Y2 = t23;
+   assign Y3 = t24;
+   assign t21 = tm11[12:1];
+   assign t22 = tm12[12:1];
+   assign t23 = tm13[12:1];
+   assign t24 = tm14[12:1];
+
+    addfxp #(13, 1) add17505(.a({{1{a9[11]}}, a9}), .b({{1{a10[11]}}, a10}), .clk(clk), .q(tm11));    // 0
+    addfxp #(13, 1) add17520(.a({{1{a11[11]}}, a11}), .b({{1{a12[11]}}, a12}), .clk(clk), .q(tm12));    // 0
+    subfxp #(13, 1) sub17535(.a({{1{a9[11]}}, a9}), .b({{1{a10[11]}}, a10}), .clk(clk), .q(tm13));    // 0
+    subfxp #(13, 1) sub17550(.a({{1{a11[11]}}, a11}), .b({{1{a12[11]}}, a12}), .clk(clk), .q(tm14));    // 0
+
+
+   always @(posedge clk) begin
+      if (reset == 1) begin
       end
-      mem[0]<=X;
+      else begin
+         X0 <= X0_in;
+         X1 <= X1_in;
+         X2 <= X2_in;
+         X3 <= X3_in;
+         next <= next_in;
+      end
    end
 endmodule
+
+// Latency: 1012
+// Gap: 1024
+module rc17574(clk, reset, next, next_out,
+   X0, Y0,
+   X1, Y1,
+   X2, Y2,
+   X3, Y3);
+
+   output next_out;
+   input clk, reset, next;
+
+   input [11:0] X0,
+      X1,
+      X2,
+      X3;
+
+   output [11:0] Y0,
+      Y1,
+      Y2,
+      Y3;
+
+   wire [23:0] t0;
+   wire [23:0] s0;
+   assign t0 = {X0, X1};
+   wire [23:0] t1;
+   wire [23:0] s1;
+   assign t1 = {X2, X3};
+   assign Y0 = s0[23:12];
+   assign Y1 = s0[11:0];
+   assign Y2 = s1[23:12];
+   assign Y3 = s1[11:0];
+
+   perm17572 instPerm17837(.x0(t0), .y0(s0),
+    .x1(t1), .y1(s1),
+   .clk(clk), .next(next), .next_out(next_out), .reset(reset)
+);
+
+
+
+endmodule
+
+// Latency: 1012
+// Gap: 1024
+module perm17572(clk, next, reset, next_out,
+   x0, y0,
+   x1, y1);
+   parameter numBanks = 2;
+   parameter logBanks = 1;
+   parameter depth = 1024;
+   parameter logDepth = 10;
+   parameter width = 24;
+
+   input [width-1:0]  x0;
+   output [width-1:0]  y0;
+   wire [width-1:0]  ybuff0;
+   input [width-1:0]  x1;
+   output [width-1:0]  y1;
+   wire [width-1:0]  ybuff1;
+   input 	      clk, next, reset;
+   output 	     next_out;
+
+   wire    	     next0;
+
+   reg              inFlip0, outFlip0;
+   reg              inActive, outActive;
+
+   wire [logBanks-1:0] inBank0, outBank0;
+   wire [logDepth-1:0] inAddr0, outAddr0;
+   wire [logBanks-1:0] outBank_a0;
+   wire [logDepth-1:0] outAddr_a0;
+   wire [logDepth+logBanks-1:0] addr0, addr0b, addr0c;
+   wire [logBanks-1:0] inBank1, outBank1;
+   wire [logDepth-1:0] inAddr1, outAddr1;
+   wire [logBanks-1:0] outBank_a1;
+   wire [logDepth-1:0] outAddr_a1;
+   wire [logDepth+logBanks-1:0] addr1, addr1b, addr1c;
+
+
+   reg [logDepth-1:0]  inCount, outCount, outCount_d, outCount_dd, outCount_for_rd_addr, outCount_for_rd_data;  
+
+   assign    addr0 = {inCount, 1'd0};
+   assign    addr0b = {outCount, 1'd0};
+   assign    addr0c = {outCount_for_rd_addr, 1'd0};
+   assign    addr1 = {inCount, 1'd1};
+   assign    addr1b = {outCount, 1'd1};
+   assign    addr1c = {outCount_for_rd_addr, 1'd1};
+    wire [width+logDepth-1:0] w_0_0, w_0_1, w_1_0, w_1_1;
+
+    reg [width-1:0] z_0_0;
+    reg [width-1:0] z_0_1;
+    wire [width-1:0] z_1_0, z_1_1;
+
+    wire [logDepth-1:0] u_0_0, u_0_1, u_1_0, u_1_1;
+
+    always @(posedge clk) begin
+    end
+
+   assign inBank0[0] = addr0[1] ^ addr0[0];
+   assign inAddr0[0] = addr0[2];
+   assign inAddr0[1] = addr0[3];
+   assign inAddr0[2] = addr0[4];
+   assign inAddr0[3] = addr0[5];
+   assign inAddr0[4] = addr0[6];
+   assign inAddr0[5] = addr0[7];
+   assign inAddr0[6] = addr0[8];
+   assign inAddr0[7] = addr0[9];
+   assign inAddr0[8] = addr0[10];
+   assign inAddr0[9] = addr0[0];
+   assign outBank0[0] = addr0b[10] ^ addr0b[0];
+   assign outAddr0[0] = addr0b[1];
+   assign outAddr0[1] = addr0b[2];
+   assign outAddr0[2] = addr0b[3];
+   assign outAddr0[3] = addr0b[4];
+   assign outAddr0[4] = addr0b[5];
+   assign outAddr0[5] = addr0b[6];
+   assign outAddr0[6] = addr0b[7];
+   assign outAddr0[7] = addr0b[8];
+   assign outAddr0[8] = addr0b[9];
+   assign outAddr0[9] = addr0b[10];
+   assign outBank_a0[0] = addr0c[10] ^ addr0c[0];
+   assign outAddr_a0[0] = addr0c[1];
+   assign outAddr_a0[1] = addr0c[2];
+   assign outAddr_a0[2] = addr0c[3];
+   assign outAddr_a0[3] = addr0c[4];
+   assign outAddr_a0[4] = addr0c[5];
+   assign outAddr_a0[5] = addr0c[6];
+   assign outAddr_a0[6] = addr0c[7];
+   assign outAddr_a0[7] = addr0c[8];
+   assign outAddr_a0[8] = addr0c[9];
+   assign outAddr_a0[9] = addr0c[10];
+
+   assign inBank1[0] = addr1[1] ^ addr1[0];
+   assign inAddr1[0] = addr1[2];
+   assign inAddr1[1] = addr1[3];
+   assign inAddr1[2] = addr1[4];
+   assign inAddr1[3] = addr1[5];
+   assign inAddr1[4] = addr1[6];
+   assign inAddr1[5] = addr1[7];
+   assign inAddr1[6] = addr1[8];
+   assign inAddr1[7] = addr1[9];
+   assign inAddr1[8] = addr1[10];
+   assign inAddr1[9] = addr1[0];
+   assign outBank1[0] = addr1b[10] ^ addr1b[0];
+   assign outAddr1[0] = addr1b[1];
+   assign outAddr1[1] = addr1b[2];
+   assign outAddr1[2] = addr1b[3];
+   assign outAddr1[3] = addr1b[4];
+   assign outAddr1[4] = addr1b[5];
+   assign outAddr1[5] = addr1b[6];
+   assign outAddr1[6] = addr1b[7];
+   assign outAddr1[7] = addr1b[8];
+   assign outAddr1[8] = addr1b[9];
+   assign outAddr1[9] = addr1b[10];
+   assign outBank_a1[0] = addr1c[10] ^ addr1c[0];
+   assign outAddr_a1[0] = addr1c[1];
+   assign outAddr_a1[1] = addr1c[2];
+   assign outAddr_a1[2] = addr1c[3];
+   assign outAddr_a1[3] = addr1c[4];
+   assign outAddr_a1[4] = addr1c[5];
+   assign outAddr_a1[5] = addr1c[6];
+   assign outAddr_a1[6] = addr1c[7];
+   assign outAddr_a1[7] = addr1c[8];
+   assign outAddr_a1[8] = addr1c[9];
+   assign outAddr_a1[9] = addr1c[10];
+
+   nextReg #(1010, 10) nextReg_17842(.X(next), .Y(next0), .reset(reset), .clk(clk));
+
+
+   shiftRegFIFO #(2, 1) shiftFIFO_17845(.X(next0), .Y(next_out), .clk(clk));
+
+
+   memArray2048_17572 #(numBanks, logBanks, depth, logDepth, width)
+     memSys(.inFlip(inFlip0), .outFlip(outFlip0), .next(next), .reset(reset),
+        .x0(w_1_0[width+logDepth-1:logDepth]), .y0(ybuff0),
+        .inAddr0(w_1_0[logDepth-1:0]),
+        .outAddr0(u_1_0), 
+        .x1(w_1_1[width+logDepth-1:logDepth]), .y1(ybuff1),
+        .inAddr1(w_1_1[logDepth-1:0]),
+        .outAddr1(u_1_1), 
+        .clk(clk));
+
+   always @(posedge clk) begin
+      if (reset == 1) begin
+      z_0_0 <= 0;
+      z_0_1 <= 0;
+         inFlip0 <= 0; outFlip0 <= 1; outCount <= 0; inCount <= 0;
+        outCount_for_rd_addr <= 0;
+        outCount_for_rd_data <= 0;
+      end
+      else begin
+          outCount_d <= outCount;
+          outCount_dd <= outCount_d;
+         if (inCount == 1009)
+            outCount_for_rd_addr <= 0;
+         else
+            outCount_for_rd_addr <= outCount_for_rd_addr+1;
+         if (inCount == 1011)
+            outCount_for_rd_data <= 0;
+         else
+            outCount_for_rd_data <= outCount_for_rd_data+1;
+      z_0_0 <= ybuff0;
+      z_0_1 <= ybuff1;
+         if (inCount == 1009) begin
+            outFlip0 <= ~outFlip0;
+            outCount <= 0;
+         end
+         else
+            outCount <= outCount+1;
+         if (inCount == 1023) begin
+            inFlip0 <= ~inFlip0;
+         end
+         if (next == 1) begin
+            if (inCount >= 1009)
+               inFlip0 <= ~inFlip0;
+            inCount <= 0;
+         end
+         else
+            inCount <= inCount + 1;
+      end
+   end
+    assign w_0_0 = {x0, inAddr0};
+    assign w_0_1 = {x1, inAddr1};
+    assign y0 = z_1_0;
+    assign y1 = z_1_1;
+    assign u_0_0 = outAddr_a0;
+    assign u_0_1 = outAddr_a1;
+    wire wr_ctrl_st_0;
+    assign wr_ctrl_st_0 = inCount[0];
+
+    switch #(logDepth+width) in_sw_0_0(.x0(w_0_0), .x1(w_0_1), .y0(w_1_0), .y1(w_1_1), .ctrl(wr_ctrl_st_0));
+    wire rdd_ctrl_st_0;
+    assign rdd_ctrl_st_0 = outCount_for_rd_data[9];
+
+    switch #(width) out_sw_0_0(.x0(z_0_0), .x1(z_0_1), .y0(z_1_0), .y1(z_1_1), .ctrl(rdd_ctrl_st_0));
+    wire rda_ctrl_st_0;
+    assign rda_ctrl_st_0 = outCount_for_rd_addr[9];
+
+    switch #(logDepth) rdaddr_sw_0_0(.x0(u_0_0), .x1(u_0_1), .y0(u_1_0), .y1(u_1_1), .ctrl(rda_ctrl_st_0));
+endmodule
+
+module memArray2048_17572(next, reset,
+                x0, y0,
+                inAddr0,
+                outAddr0,
+                x1, y1,
+                inAddr1,
+                outAddr1,
+                clk, inFlip, outFlip);
+
+   parameter numBanks = 2;
+   parameter logBanks = 1;
+   parameter depth = 1024;
+   parameter logDepth = 10;
+   parameter width = 24;
+         
+   input     clk, next, reset;
+   input    inFlip, outFlip;
+   wire    next0;
+   
+   input [width-1:0]   x0;
+   output [width-1:0]  y0;
+   input [logDepth-1:0] inAddr0, outAddr0;
+   input [width-1:0]   x1;
+   output [width-1:0]  y1;
+   input [logDepth-1:0] inAddr1, outAddr1;
+   nextReg #(1024, 10) nextReg_17850(.X(next), .Y(next0), .reset(reset), .clk(clk));
+
+
+   memMod #(depth*2, width, logDepth+1) 
+     memMod0(.in(x0), .out(y0), .inAddr({inFlip, inAddr0}),
+	   .outAddr({outFlip, outAddr0}), .writeSel(1'b1), .clk(clk));   
+   memMod #(depth*2, width, logDepth+1) 
+     memMod1(.in(x1), .out(y1), .inAddr({inFlip, inAddr1}),
+	   .outAddr({outFlip, outAddr1}), .writeSel(1'b1), .clk(clk));   
+endmodule
+
 
 
 						module multfix(clk, rst, a, b, q_sc, q_unsc);
