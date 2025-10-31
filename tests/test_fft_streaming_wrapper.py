@@ -44,6 +44,58 @@ def generate_symbol(tone_specs: list[tuple[int, float]]) -> tuple[np.ndarray, np
     return real, imag, complex_view
 
 
+def generate_ofdm_qpsk_waveform(
+    nfft: int,
+    data_width: int,
+    num_subcarriers: int = 256,
+    seed: int = 2024,
+) -> dict[str, np.ndarray]:
+    """Synthesize a single-antenna OFDM symbol with quantized QPSK subcarriers."""
+    if num_subcarriers >= nfft:
+        raise ValueError("num_subcarriers must be smaller than the FFT size")
+
+    rng = np.random.default_rng(seed)
+    qpsk_points = (
+        np.array([1 + 1j, 1 - 1j, -1 + 1j, -1 - 1j], dtype=np.complex128) / np.sqrt(2.0)
+    )
+    occupied_start = (nfft // 2) - (num_subcarriers // 2)
+    occupied_bins = np.arange(occupied_start, occupied_start + num_subcarriers, dtype=int)
+
+    freq_domain = np.zeros(nfft, dtype=np.complex128)
+    mapped_symbols = qpsk_points[rng.integers(0, 4, size=num_subcarriers)]
+    freq_domain[occupied_bins] = mapped_symbols
+
+    time_domain = np.fft.ifft(freq_domain)
+    real_peak = np.max(np.abs(time_domain.real))
+    imag_peak = np.max(np.abs(time_domain.imag))
+    peak = float(max(real_peak, imag_peak))
+    if peak == 0.0:
+        scale = 0.0
+    else:
+        scale = (2 ** (data_width - 1) - 1) / peak
+
+    quant_real = np.clip(
+        np.round(time_domain.real * scale),
+        -(2 ** (data_width - 1)),
+        2 ** (data_width - 1) - 1,
+    ).astype(np.int16)
+    quant_imag = np.clip(
+        np.round(time_domain.imag * scale),
+        -(2 ** (data_width - 1)),
+        2 ** (data_width - 1) - 1,
+    ).astype(np.int16)
+    quantized_complex = quant_real.astype(np.float64) + 1j * quant_imag.astype(np.float64)
+
+    reference_fft = np.fft.fft(quantized_complex)
+
+    return {
+        "occupied_bins": occupied_bins,
+        "quant_real": quant_real,
+        "quant_imag": quant_imag,
+        "reference_fft": reference_fft,
+    }
+
+
 def pack_samples(ant0_real: int, ant0_imag: int, ant1_real: int, ant1_imag: int) -> int:
     """Pack two complex samples into the AXI4-Stream word format."""
     mask = (1 << DATA_WIDTH) - 1
@@ -53,6 +105,140 @@ def pack_samples(ant0_real: int, ant0_imag: int, ant1_real: int, ant1_imag: int)
         | (_to_unsigned(ant0_imag, DATA_WIDTH) << 12)
         | _to_unsigned(ant0_real, DATA_WIDTH)
     )
+
+
+@cocotb.test()
+async def fft_streaming_ofdm_constellation(dut):
+    axis_clock = Clock(dut.clk_axis, 10, units="ns")
+    fft_clock = Clock(dut.clk_fft, 4, units="ns")
+    cocotb.start_soon(axis_clock.start())
+    cocotb.start_soon(fft_clock.start())
+
+    dut.rst_axis_n.value = 0
+    dut.rst_fft_n.value = 0
+    dut.s_axis_tdata.value = 0
+    dut.s_axis_tuser.value = 0
+    dut.s_axis_tvalid.value = 0
+    dut.s_axis_tlast.value = 0
+    dut.m_axis_tready.value = 1
+
+    for _ in range(6):
+        await RisingEdge(dut.clk_fft)
+    dut.rst_fft_n.value = 1
+
+    for _ in range(6):
+        await RisingEdge(dut.clk_axis)
+    dut.rst_axis_n.value = 1
+
+    for _ in range(6):
+        await RisingEdge(dut.clk_axis)
+
+    ofdm_symbol = generate_ofdm_qpsk_waveform(NFFT, DATA_WIDTH, num_subcarriers=256, seed=7)
+
+    for sample_idx in range(NFFT):
+        packed = pack_samples(
+            int(ofdm_symbol["quant_real"][sample_idx]),
+            int(ofdm_symbol["quant_imag"][sample_idx]),
+            0,
+            0,
+        )
+
+        dut.s_axis_tdata.value = packed
+        dut.s_axis_tuser.value = 0
+        dut.s_axis_tvalid.value = 1
+
+        while True:
+            await RisingEdge(dut.clk_axis)
+            if dut.s_axis_tready.value:
+                break
+
+        dut.s_axis_tvalid.value = 0
+
+    dut.s_axis_tdata.value = 0
+    dut.s_axis_tuser.value = 0
+    dut.s_axis_tlast.value = 0
+
+    outputs: list[complex] = []
+    max_cycles = NFFT + GAP_CYCLES + 2048
+
+    for _ in range(max_cycles):
+        await RisingEdge(dut.clk_axis)
+        if dut.m_axis_tvalid.value:
+            data_word = int(dut.m_axis_tdata.value)
+            ant0_real = _from_unsigned(data_word & ((1 << DATA_WIDTH) - 1), DATA_WIDTH)
+            ant0_imag = _from_unsigned((data_word >> 12) & ((1 << DATA_WIDTH) - 1), DATA_WIDTH)
+            outputs.append(complex(ant0_real, ant0_imag))
+            if len(outputs) >= NFFT:
+                break
+
+    rtl_bins = np.asarray(outputs, dtype=np.complex128)
+    plots_dir = Path(__file__).parent / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    time_axis = np.arange(NFFT)
+    quant_real = ofdm_symbol["quant_real"].astype(np.int16)
+    quant_imag = ofdm_symbol["quant_imag"].astype(np.int16)
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    axes[0].plot(time_axis, quant_real, linewidth=0.8)
+    axes[0].set_ylabel("I (LSBs)")
+    axes[0].set_title("Quantized OFDM Symbol - Time Domain (Input)")
+    axes[0].grid(True, linestyle=":", linewidth=0.5)
+
+    axes[1].plot(time_axis, quant_imag, linewidth=0.8, color="tab:orange")
+    axes[1].set_ylabel("Q (LSBs)")
+    axes[1].set_xlabel("Sample Index")
+    axes[1].grid(True, linestyle=":", linewidth=0.5)
+
+    fig.tight_layout()
+    time_plot_path = plots_dir / "fft_streaming_wrapper_ofdm_timeseries.png"
+    fig.savefig(time_plot_path, dpi=150)
+    plt.close(fig)
+    dut._log.info(f"Saved OFDM input time-series plot to {time_plot_path}")
+
+    if rtl_bins.size < NFFT:
+        dut._log.warning(
+            "Captured %d FFT bins, expected %d; skipping constellation plot",
+            rtl_bins.size,
+            NFFT,
+        )
+        return
+
+    occupied_bins = ofdm_symbol["occupied_bins"]
+    reference_fft = ofdm_symbol["reference_fft"]
+    ref_points = reference_fft[occupied_bins]
+    rtl_points = rtl_bins[occupied_bins]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    axes[0].scatter(ref_points.real, ref_points.imag, alpha=0.6, s=12, color="tab:blue")
+    axes[0].set_title("Reference (NumPy)")
+    axes[1].scatter(
+        rtl_points.real,
+        rtl_points.imag,
+        marker="x",
+        s=20,
+        linewidths=0.8,
+        color="tab:orange",
+    )
+    axes[1].set_title("FFT Output (RTL)")
+
+    for ax in axes:
+        ax.axhline(0, color="black", linewidth=0.5, linestyle=":")
+        ax.axvline(0, color="black", linewidth=0.5, linestyle=":")
+        ax.grid(True, linestyle=":", linewidth=0.5)
+        ax.set_aspect("equal", adjustable="box")
+
+    axes[0].set_xlabel("I")
+    axes[0].set_ylabel("Q")
+    axes[1].set_xlabel("I")
+    axes[1].set_ylabel("Q")
+    fig.suptitle("OFDM Constellation (No Additional Scaling)")
+
+    fig.tight_layout()
+    constellation_plot_path = plots_dir / "fft_streaming_wrapper_ofdm_constellation.png"
+    fig.savefig(constellation_plot_path, dpi=150)
+    plt.close(fig)
+    dut._log.info(f"Saved OFDM constellation plot to {constellation_plot_path}")
 
 
 @cocotb.test()

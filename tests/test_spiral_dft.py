@@ -59,6 +59,56 @@ def generate_pwm_waveform(
     return waveform.astype(np.int16, copy=False)
 
 
+def generate_ofdm_qpsk_waveform(
+    nfft: int,
+    data_width: int,
+    num_subcarriers: int = 256,
+    seed: int = 2024,
+) -> dict[str, np.ndarray]:
+    """Build an OFDM symbol with quantized QPSK subcarriers."""
+    if num_subcarriers >= nfft:
+        raise ValueError("num_subcarriers must be smaller than the FFT size")
+
+    rng = np.random.default_rng(seed)
+    qpsk_points = (
+        np.array([1 + 1j, 1 - 1j, -1 + 1j, -1 - 1j], dtype=np.complex128) / np.sqrt(2.0)
+    )
+    occupied_start = (nfft // 2) - (num_subcarriers // 2)
+    occupied_bins = np.arange(occupied_start, occupied_start + num_subcarriers, dtype=int)
+
+    freq_domain = np.zeros(nfft, dtype=np.complex128)
+    freq_domain[occupied_bins] = qpsk_points[rng.integers(0, 4, size=num_subcarriers)]
+
+    time_domain = np.fft.ifft(freq_domain)
+    real_peak = np.max(np.abs(time_domain.real))
+    imag_peak = np.max(np.abs(time_domain.imag))
+    peak = float(max(real_peak, imag_peak))
+    if peak == 0.0:
+        scale = 0.0
+    else:
+        scale = (2 ** (data_width - 1) - 1) / peak
+
+    quant_real = np.clip(
+        np.round(time_domain.real * scale),
+        -(2 ** (data_width - 1)),
+        2 ** (data_width - 1) - 1,
+    ).astype(np.int16)
+    quant_imag = np.clip(
+        np.round(time_domain.imag * scale),
+        -(2 ** (data_width - 1)),
+        2 ** (data_width - 1) - 1,
+    ).astype(np.int16)
+    quantized_complex = quant_real.astype(np.float64) + 1j * quant_imag.astype(np.float64)
+    reference_fft = np.fft.fft(quantized_complex)
+
+    return {
+        "occupied_bins": occupied_bins,
+        "quant_real": quant_real,
+        "quant_imag": quant_imag,
+        "reference_fft": reference_fft,
+    }
+
+
 @cocotb.test()
 async def spiral_dft_pwm_reference(dut):
     """Feed a PWM stimulus through the SPIRAL DFT and capture its response."""
@@ -171,6 +221,125 @@ async def spiral_dft_pwm_reference(dut):
     plt.close(fig)
 
     dut._log.info(f"Saved FFT plot to {plot_path}")
+
+
+@cocotb.test()
+async def spiral_dft_ofdm_constellation(dut):
+    """Drive an OFDM symbol through the SPIRAL DFT and capture time/constellation plots."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    dut.reset.value = 0
+    dut.next.value = 0
+    dut.X0.value = 0
+    dut.X1.value = 0
+    dut.X2.value = 0
+    dut.X3.value = 0
+
+    await RisingEdge(dut.clk)
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+
+    symbol = generate_ofdm_qpsk_waveform(
+        NUM_COMPLEX_SAMPLES,
+        DATA_WIDTH,
+        num_subcarriers=256,
+        seed=11,
+    )
+
+    quant_real = symbol["quant_real"]
+    quant_imag = symbol["quant_imag"]
+
+    dut.next.value = 1
+    await RisingEdge(dut.clk)
+    dut.next.value = 0
+
+    for cycle in range(CYCLES_PER_TRANSFORM):
+        base = cycle * SAMPLES_PER_CYCLE
+        sample_a_real = int(quant_real[base])
+        sample_a_imag = int(quant_imag[base])
+        sample_b_real = int(quant_real[base + 1])
+        sample_b_imag = int(quant_imag[base + 1])
+
+        dut.X0.value = _to_unsigned(sample_a_real, DATA_WIDTH)
+        dut.X1.value = _to_unsigned(sample_a_imag, DATA_WIDTH)
+        dut.X2.value = _to_unsigned(sample_b_real, DATA_WIDTH)
+        dut.X3.value = _to_unsigned(sample_b_imag, DATA_WIDTH)
+        await RisingEdge(dut.clk)
+
+    dut.X0.value = 0
+    dut.X1.value = 0
+    dut.X2.value = 0
+    dut.X3.value = 0
+
+    await with_timeout(RisingEdge(dut.next_out), timeout_time=200_000, timeout_unit="ns")
+
+    outputs: list[complex] = []
+    for _ in range(CYCLES_PER_TRANSFORM):
+        await RisingEdge(dut.clk)
+        real_0 = _from_unsigned(dut.Y0.value.integer, DATA_WIDTH)
+        imag_0 = _from_unsigned(dut.Y1.value.integer, DATA_WIDTH)
+        real_1 = _from_unsigned(dut.Y2.value.integer, DATA_WIDTH)
+        imag_1 = _from_unsigned(dut.Y3.value.integer, DATA_WIDTH)
+        outputs.append(complex(real_0, imag_0))
+        outputs.append(complex(real_1, imag_1))
+
+    rtl_bins = np.asarray(outputs, dtype=np.complex128)
+    plots_dir = Path(__file__).parent / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    time_axis = np.arange(NUM_COMPLEX_SAMPLES)
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    axes[0].plot(time_axis, quant_real, linewidth=0.8)
+    axes[0].set_ylabel("I (LSBs)")
+    axes[0].set_title("OFDM Symbol - Time Domain (Input)")
+    axes[0].grid(True, linestyle=":", linewidth=0.5)
+
+    axes[1].plot(time_axis, quant_imag, linewidth=0.8, color="tab:orange")
+    axes[1].set_ylabel("Q (LSBs)")
+    axes[1].set_xlabel("Sample Index")
+    axes[1].grid(True, linestyle=":", linewidth=0.5)
+
+    fig.tight_layout()
+    time_plot_path = plots_dir / "spiral_dft_ofdm_timeseries.png"
+    fig.savefig(time_plot_path, dpi=150)
+    plt.close(fig)
+    dut._log.info(f"Saved OFDM input time-series plot to {time_plot_path}")
+
+    occupied_bins = symbol["occupied_bins"]
+    reference_fft = symbol["reference_fft"]
+    ref_points = reference_fft[occupied_bins]
+    rtl_points = rtl_bins[occupied_bins]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    axes[0].scatter(ref_points.real, ref_points.imag, alpha=0.6, s=12, color="tab:blue")
+    axes[0].set_title("Reference (NumPy)")
+    axes[1].scatter(
+        rtl_points.real,
+        rtl_points.imag,
+        marker="x",
+        s=20,
+        linewidths=0.8,
+        color="tab:orange",
+    )
+    axes[1].set_title("SPIRAL DFT (RTL)")
+
+    for ax in axes:
+        ax.axhline(0, color="black", linewidth=0.5, linestyle=":")
+        ax.axvline(0, color="black", linewidth=0.5, linestyle=":")
+        ax.grid(True, linestyle=":", linewidth=0.5)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("I")
+        ax.set_ylabel("Q")
+
+    fig.suptitle("OFDM Constellation (No Additional Scaling)")
+    fig.tight_layout()
+    constellation_path = plots_dir / "spiral_dft_ofdm_constellation.png"
+    fig.savefig(constellation_path, dpi=150)
+    plt.close(fig)
+    dut._log.info(f"Saved OFDM constellation plot to {constellation_path}")
 
 
 @pytest.mark.skipif(VERILATOR is None, reason="Verilator executable not found; install Verilator to run this test.")
