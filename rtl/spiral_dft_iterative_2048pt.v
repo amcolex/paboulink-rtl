@@ -29,6 +29,7 @@
  */
 
 //   Input/output stream: 2 complex words per cycle
+// verilator lint_off WIDTHEXPAND
 //   Throughput: one transform every 11287 cycles
 //   Latency: 12267 cycles
 
@@ -217,6 +218,8 @@ module dft_testbench();
       $finish;
    end
 endmodule
+
+// verilator lint_on WIDTHEXPAND
 
 // Latency: 12267
 // Gap: 11287
