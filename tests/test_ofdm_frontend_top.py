@@ -123,6 +123,8 @@ async def frontend_end_to_end(dut):
     dut.m_axis_tready.value = 1
 
     params = OFDMParameters(n_fft=nfft, cp_len=cp_len)
+    preamble_rng = np.random.default_rng(202)
+    payload_rng = np.random.default_rng(303)
 
     num_frames = 2
     frame_segments: List[np.ndarray] = []
@@ -133,12 +135,20 @@ async def frontend_end_to_end(dut):
 
     for frame_idx in range(num_frames):
         frame_start = cursor
-        preamble, _ = generate_preamble(params=params, include_cp=True, normalize=True)
+        preamble, _ = generate_preamble(
+            params=params,
+            include_cp=True,
+            normalize=True,
+            rng=preamble_rng,
+        )
         frame_segments.append(preamble)
         cursor += preamble.size
         for _ in range(n_symbols):
             symbol_td, _ = generate_qpsk_symbol(
-                params=params, include_cp=True, normalize=True
+                params=params,
+                include_cp=True,
+                normalize=True,
+                rng=payload_rng,
             )
             payload_start = cursor + cp_len
             frame_segments.append(symbol_td)

@@ -192,8 +192,10 @@ async def minn_detector_flags_expected_sample(dut):
     await RisingEdge(dut.clk)
 
     params = OFDMParameters(n_fft=NFFT, cp_len=CP_LEN)
-    preamble, _ = generate_preamble(params=params)
-    data_symbol, _ = generate_qpsk_symbol(params=params)
+    preamble_rng = np.random.default_rng(404)
+    payload_rng = np.random.default_rng(505)
+    preamble, _ = generate_preamble(params=params, rng=preamble_rng)
+    data_symbol, _ = generate_qpsk_symbol(params=params, rng=payload_rng)
     preamble_len = preamble.size
     data_len = data_symbol.size
     leading_guard = np.zeros(LEADING_GUARD_LEN, dtype=np.complex128)

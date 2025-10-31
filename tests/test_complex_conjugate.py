@@ -17,9 +17,10 @@ async def conjugate_matches_expected(dut):
     min_val = -(1 << (width - 1))
     max_val = (1 << (width - 1)) - 1
 
+    rng = random.Random(0)
     for _ in range(20):
-        i_real = random.randint(min_val, max_val)
-        i_imag = random.randint(min_val, max_val)
+        i_real = rng.randint(min_val, max_val)
+        i_imag = rng.randint(min_val, max_val)
 
         dut.i_real.value = i_real
         dut.i_imag.value = i_imag
