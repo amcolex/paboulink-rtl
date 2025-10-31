@@ -1,5 +1,6 @@
 import math
 import os
+import sys
 from pathlib import Path
 import shutil
 
@@ -14,6 +15,9 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, with_timeout
 from cocotb_test.simulator import run
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tests.utils.ofdm import generate_quantized_qpsk_symbol
 
 VERILATOR = shutil.which("verilator")
 
@@ -57,56 +61,6 @@ def generate_pwm_waveform(
     repeats = math.ceil(num_samples / period)
     waveform = np.tile(pattern, repeats)[:num_samples]
     return waveform.astype(np.int16, copy=False)
-
-
-def generate_ofdm_qpsk_waveform(
-    nfft: int,
-    data_width: int,
-    num_subcarriers: int = 256,
-    seed: int = 2024,
-) -> dict[str, np.ndarray]:
-    """Build an OFDM symbol with quantized QPSK subcarriers."""
-    if num_subcarriers >= nfft:
-        raise ValueError("num_subcarriers must be smaller than the FFT size")
-
-    rng = np.random.default_rng(seed)
-    qpsk_points = (
-        np.array([1 + 1j, 1 - 1j, -1 + 1j, -1 - 1j], dtype=np.complex128) / np.sqrt(2.0)
-    )
-    occupied_start = (nfft // 2) - (num_subcarriers // 2)
-    occupied_bins = np.arange(occupied_start, occupied_start + num_subcarriers, dtype=int)
-
-    freq_domain = np.zeros(nfft, dtype=np.complex128)
-    freq_domain[occupied_bins] = qpsk_points[rng.integers(0, 4, size=num_subcarriers)]
-
-    time_domain = np.fft.ifft(freq_domain)
-    real_peak = np.max(np.abs(time_domain.real))
-    imag_peak = np.max(np.abs(time_domain.imag))
-    peak = float(max(real_peak, imag_peak))
-    if peak == 0.0:
-        scale = 0.0
-    else:
-        scale = (2 ** (data_width - 1) - 1) / peak
-
-    quant_real = np.clip(
-        np.round(time_domain.real * scale),
-        -(2 ** (data_width - 1)),
-        2 ** (data_width - 1) - 1,
-    ).astype(np.int16)
-    quant_imag = np.clip(
-        np.round(time_domain.imag * scale),
-        -(2 ** (data_width - 1)),
-        2 ** (data_width - 1) - 1,
-    ).astype(np.int16)
-    quantized_complex = quant_real.astype(np.float64) + 1j * quant_imag.astype(np.float64)
-    reference_fft = np.fft.fft(quantized_complex)
-
-    return {
-        "occupied_bins": occupied_bins,
-        "quant_real": quant_real,
-        "quant_imag": quant_imag,
-        "reference_fft": reference_fft,
-    }
 
 
 @cocotb.test()
@@ -241,15 +195,17 @@ async def spiral_dft_ofdm_constellation(dut):
     await RisingEdge(dut.clk)
     dut.reset.value = 0
 
-    symbol = generate_ofdm_qpsk_waveform(
-        NUM_COMPLEX_SAMPLES,
-        DATA_WIDTH,
+    symbol = generate_quantized_qpsk_symbol(
+        n_fft=NUM_COMPLEX_SAMPLES,
+        data_width=DATA_WIDTH,
         num_subcarriers=256,
         seed=11,
+        cp_len=0,
+        include_cp=False,
     )
 
-    quant_real = symbol["quant_real"]
-    quant_imag = symbol["quant_imag"]
+    quant_real = symbol.i_values
+    quant_imag = symbol.q_values
 
     dut.next.value = 1
     await RisingEdge(dut.clk)
@@ -308,8 +264,8 @@ async def spiral_dft_ofdm_constellation(dut):
     plt.close(fig)
     dut._log.info(f"Saved OFDM input time-series plot to {time_plot_path}")
 
-    occupied_bins = symbol["occupied_bins"]
-    reference_fft = symbol["reference_fft"]
+    occupied_bins = symbol.occupied_bins
+    reference_fft = symbol.reference_fft
     ref_points = reference_fft[occupied_bins]
     rtl_points = rtl_bins[occupied_bins]
 

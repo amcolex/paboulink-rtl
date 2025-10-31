@@ -31,6 +31,20 @@ class OFDMParameters:
             raise ValueError("Cyclic prefix length must be non-negative.")
 
 
+@dataclass(frozen=True)
+class QuantizedOFDMSymbol:
+    """Helper container describing a quantized OFDM symbol."""
+
+    params: OFDMParameters
+    i_values: np.ndarray
+    q_values: np.ndarray
+    complex_samples: np.ndarray
+    occupied_bins: np.ndarray
+    occupied_bins_centered: np.ndarray
+    reference_fft: np.ndarray
+    scale: float
+
+
 def centered_subcarrier_indices(num_active: int, *, spacing: int = 1) -> np.ndarray:
     """Return symmetric subcarrier indices around DC while skipping the 0th bin."""
     if num_active % 2:
@@ -198,6 +212,67 @@ def generate_preamble(
     if include_cp:
         preamble = add_cyclic_prefix(preamble, params.cp_len)
     return preamble, values
+
+
+def quantize_complex_samples(
+    samples: np.ndarray,
+    data_width: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """Quantize complex samples into signed fixed-point integers."""
+    samples = np.asarray(samples, dtype=np.complex128)
+    min_val = -(1 << (data_width - 1))
+    max_val = (1 << (data_width - 1)) - 1
+    real_peak = np.max(np.abs(samples.real))
+    imag_peak = np.max(np.abs(samples.imag))
+    peak = float(max(real_peak, imag_peak))
+    scale = 0.0 if peak == 0.0 else (max_val / peak)
+
+    i_vals = np.clip(np.round(samples.real * scale), min_val, max_val).astype(np.int16)
+    q_vals = np.clip(np.round(samples.imag * scale), min_val, max_val).astype(np.int16)
+    quantized_complex = i_vals.astype(np.float64) + 1j * q_vals.astype(np.float64)
+    return i_vals, q_vals, quantized_complex, scale
+
+
+def generate_quantized_qpsk_symbol(
+    *,
+    n_fft: int,
+    data_width: int,
+    num_subcarriers: int,
+    seed: int = 0,
+    cp_len: int = 0,
+    include_cp: bool = False,
+    normalize: bool = True,
+    spacing: int = 1,
+) -> QuantizedOFDMSymbol:
+    """Generate and quantize a QPSK OFDM symbol suitable for fixed-point stimulus."""
+    params = OFDMParameters(n_fft=n_fft, num_active=num_subcarriers * spacing, cp_len=cp_len)
+
+    rng = np.random.default_rng(seed)
+    symbol_td, subcarrier_vals = generate_qpsk_symbol(
+        params=params,
+        rng=rng,
+        include_cp=include_cp,
+        normalize=normalize,
+        spacing=spacing,
+    )
+
+    i_vals, q_vals, quantized_complex, scale = quantize_complex_samples(symbol_td, data_width)
+
+    centered_indices = centered_subcarrier_indices(subcarrier_vals.size, spacing=spacing)
+    occupied_bins_centered = ((params.n_fft // 2) + centered_indices) % params.n_fft
+    occupied_bins = np.mod(centered_indices, params.n_fft)
+    reference_fft = np.fft.fft(quantized_complex)
+
+    return QuantizedOFDMSymbol(
+        params=params,
+        i_values=i_vals,
+        q_values=q_vals,
+        complex_samples=quantized_complex,
+        occupied_bins=occupied_bins,
+        occupied_bins_centered=occupied_bins_centered,
+        reference_fft=reference_fft,
+        scale=scale,
+    )
 
 
 def generate_frame(

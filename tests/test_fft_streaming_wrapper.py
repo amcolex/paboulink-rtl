@@ -1,4 +1,5 @@
 import shutil
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -12,6 +13,9 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 from cocotb_test.simulator import run
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tests.utils.ofdm import generate_quantized_qpsk_symbol
 
 VERILATOR = shutil.which("verilator")
 
@@ -42,58 +46,6 @@ def generate_symbol(tone_specs: list[tuple[int, float]]) -> tuple[np.ndarray, np
     imag = np.clip(np.round(np.imag(waveform)), -2048, 2047).astype(np.int16)
     complex_view = real.astype(np.float64) + 1j * imag.astype(np.float64)
     return real, imag, complex_view
-
-
-def generate_ofdm_qpsk_waveform(
-    nfft: int,
-    data_width: int,
-    num_subcarriers: int = 256,
-    seed: int = 2024,
-) -> dict[str, np.ndarray]:
-    """Synthesize a single-antenna OFDM symbol with quantized QPSK subcarriers."""
-    if num_subcarriers >= nfft:
-        raise ValueError("num_subcarriers must be smaller than the FFT size")
-
-    rng = np.random.default_rng(seed)
-    qpsk_points = (
-        np.array([1 + 1j, 1 - 1j, -1 + 1j, -1 - 1j], dtype=np.complex128) / np.sqrt(2.0)
-    )
-    occupied_start = (nfft // 2) - (num_subcarriers // 2)
-    occupied_bins = np.arange(occupied_start, occupied_start + num_subcarriers, dtype=int)
-
-    freq_domain = np.zeros(nfft, dtype=np.complex128)
-    mapped_symbols = qpsk_points[rng.integers(0, 4, size=num_subcarriers)]
-    freq_domain[occupied_bins] = mapped_symbols
-
-    time_domain = np.fft.ifft(freq_domain)
-    real_peak = np.max(np.abs(time_domain.real))
-    imag_peak = np.max(np.abs(time_domain.imag))
-    peak = float(max(real_peak, imag_peak))
-    if peak == 0.0:
-        scale = 0.0
-    else:
-        scale = (2 ** (data_width - 1) - 1) / peak
-
-    quant_real = np.clip(
-        np.round(time_domain.real * scale),
-        -(2 ** (data_width - 1)),
-        2 ** (data_width - 1) - 1,
-    ).astype(np.int16)
-    quant_imag = np.clip(
-        np.round(time_domain.imag * scale),
-        -(2 ** (data_width - 1)),
-        2 ** (data_width - 1) - 1,
-    ).astype(np.int16)
-    quantized_complex = quant_real.astype(np.float64) + 1j * quant_imag.astype(np.float64)
-
-    reference_fft = np.fft.fft(quantized_complex)
-
-    return {
-        "occupied_bins": occupied_bins,
-        "quant_real": quant_real,
-        "quant_imag": quant_imag,
-        "reference_fft": reference_fft,
-    }
 
 
 def pack_samples(ant0_real: int, ant0_imag: int, ant1_real: int, ant1_imag: int) -> int:
@@ -133,12 +85,19 @@ async def fft_streaming_ofdm_constellation(dut):
     for _ in range(6):
         await RisingEdge(dut.clk_axis)
 
-    ofdm_symbol = generate_ofdm_qpsk_waveform(NFFT, DATA_WIDTH, num_subcarriers=256, seed=7)
+    ofdm_symbol = generate_quantized_qpsk_symbol(
+        n_fft=NFFT,
+        data_width=DATA_WIDTH,
+        num_subcarriers=256,
+        seed=7,
+        cp_len=0,
+        include_cp=False,
+    )
 
     for sample_idx in range(NFFT):
         packed = pack_samples(
-            int(ofdm_symbol["quant_real"][sample_idx]),
-            int(ofdm_symbol["quant_imag"][sample_idx]),
+            int(ofdm_symbol.i_values[sample_idx]),
+            int(ofdm_symbol.q_values[sample_idx]),
             0,
             0,
         )
@@ -176,8 +135,8 @@ async def fft_streaming_ofdm_constellation(dut):
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     time_axis = np.arange(NFFT)
-    quant_real = ofdm_symbol["quant_real"].astype(np.int16)
-    quant_imag = ofdm_symbol["quant_imag"].astype(np.int16)
+    quant_real = ofdm_symbol.i_values.astype(np.int16)
+    quant_imag = ofdm_symbol.q_values.astype(np.int16)
 
     fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
     axes[0].plot(time_axis, quant_real, linewidth=0.8)
@@ -204,8 +163,8 @@ async def fft_streaming_ofdm_constellation(dut):
         )
         return
 
-    occupied_bins = ofdm_symbol["occupied_bins"]
-    reference_fft = ofdm_symbol["reference_fft"]
+    occupied_bins = ofdm_symbol.occupied_bins
+    reference_fft = ofdm_symbol.reference_fft
     ref_points = reference_fft[occupied_bins]
     rtl_points = rtl_bins[occupied_bins]
 
