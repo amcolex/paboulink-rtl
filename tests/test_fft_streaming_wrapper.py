@@ -238,6 +238,7 @@ def test_fft_streaming_wrapper(tmp_path: Path):
     run(
         verilog_sources=[
             str(rtl_dir / "fft_streaming_wrapper.v"),
+            str(rtl_dir / "dual_clock_ram.v"),
             str(rtl_dir / "dual_clock_fifo.v"),
             str(rtl_dir / "spiral_dft_iterative_2048pt.v"),
         ],

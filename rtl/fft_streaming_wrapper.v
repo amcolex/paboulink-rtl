@@ -135,10 +135,19 @@ module fft_streaming_wrapper #(
     // Ingress ping-pong memories (clk_axis domain writes)
     // ---------------------------------------------------------------------
 
-    reg [PAIR_WORD_WIDTH-1:0] ant0_bank0 [0:PAIR_COUNT-1];
-    reg [PAIR_WORD_WIDTH-1:0] ant0_bank1 [0:PAIR_COUNT-1];
-    reg [PAIR_WORD_WIDTH-1:0] ant1_bank0 [0:PAIR_COUNT-1];
-    reg [PAIR_WORD_WIDTH-1:0] ant1_bank1 [0:PAIR_COUNT-1];
+    reg                       bank0_wr_en;
+    reg                       bank1_wr_en;
+    reg [PAIR_ADDR_WIDTH-1:0] bank0_wr_addr;
+    reg [PAIR_ADDR_WIDTH-1:0] bank1_wr_addr;
+    reg [PAIR_WORD_WIDTH-1:0] ant0_bank0_wr_data;
+    reg [PAIR_WORD_WIDTH-1:0] ant0_bank1_wr_data;
+    reg [PAIR_WORD_WIDTH-1:0] ant1_bank0_wr_data;
+    reg [PAIR_WORD_WIDTH-1:0] ant1_bank1_wr_data;
+
+    wire [PAIR_WORD_WIDTH-1:0] ant0_bank0_q;
+    wire [PAIR_WORD_WIDTH-1:0] ant0_bank1_q;
+    wire [PAIR_WORD_WIDTH-1:0] ant1_bank0_q;
+    wire [PAIR_WORD_WIDTH-1:0] ant1_bank1_q;
 
     reg [PAIR_ADDR_WIDTH-1:0] ingress_pair_addr;
     reg                       ingress_bank_sel;
@@ -159,6 +168,9 @@ module fft_streaming_wrapper #(
     reg [15:0]                latency_counter [0:1];
     reg [6:0]                 latency_symbol [0:1];
     reg                       latency_valid  [0:1];
+    reg [6:0]                 latency_start_symbol [0:1];
+    reg [1:0]                 latency_start_pulse;
+    reg [1:0]                 latency_clear_pulse;
 
     reg [1:0]                 bank_release_sync0;
     reg [1:0]                 bank_release_sync1;
@@ -228,6 +240,70 @@ module fft_streaming_wrapper #(
     );
 
     // ---------------------------------------------------------------------
+    // Ping-pong bank memories
+    // ---------------------------------------------------------------------
+
+    dual_clock_ram #(
+        .ADDR_WIDTH (PAIR_ADDR_WIDTH),
+        .DATA_WIDTH (PAIR_WORD_WIDTH),
+        .DEPTH      (PAIR_COUNT)
+    ) ant0_bank0_mem (
+        .wr_clk  (clk_axis),
+        .wr_en   (bank0_wr_en),
+        .wr_addr (bank0_wr_addr),
+        .wr_data (ant0_bank0_wr_data),
+        .rd_clk  (clk_fft),
+        .rd_en   (1'b1),
+        .rd_addr (fft_read_addr),
+        .rd_data (ant0_bank0_q)
+    );
+
+    dual_clock_ram #(
+        .ADDR_WIDTH (PAIR_ADDR_WIDTH),
+        .DATA_WIDTH (PAIR_WORD_WIDTH),
+        .DEPTH      (PAIR_COUNT)
+    ) ant0_bank1_mem (
+        .wr_clk  (clk_axis),
+        .wr_en   (bank1_wr_en),
+        .wr_addr (bank1_wr_addr),
+        .wr_data (ant0_bank1_wr_data),
+        .rd_clk  (clk_fft),
+        .rd_en   (1'b1),
+        .rd_addr (fft_read_addr),
+        .rd_data (ant0_bank1_q)
+    );
+
+    dual_clock_ram #(
+        .ADDR_WIDTH (PAIR_ADDR_WIDTH),
+        .DATA_WIDTH (PAIR_WORD_WIDTH),
+        .DEPTH      (PAIR_COUNT)
+    ) ant1_bank0_mem (
+        .wr_clk  (clk_axis),
+        .wr_en   (bank0_wr_en),
+        .wr_addr (bank0_wr_addr),
+        .wr_data (ant1_bank0_wr_data),
+        .rd_clk  (clk_fft),
+        .rd_en   (1'b1),
+        .rd_addr (fft_read_addr),
+        .rd_data (ant1_bank0_q)
+    );
+
+    dual_clock_ram #(
+        .ADDR_WIDTH (PAIR_ADDR_WIDTH),
+        .DATA_WIDTH (PAIR_WORD_WIDTH),
+        .DEPTH      (PAIR_COUNT)
+    ) ant1_bank1_mem (
+        .wr_clk  (clk_axis),
+        .wr_en   (bank1_wr_en),
+        .wr_addr (bank1_wr_addr),
+        .wr_data (ant1_bank1_wr_data),
+        .rd_clk  (clk_fft),
+        .rd_en   (1'b1),
+        .rd_addr (fft_read_addr),
+        .rd_data (ant1_bank1_q)
+    );
+
+    // ---------------------------------------------------------------------
     // Ingress domain control
     // ---------------------------------------------------------------------
 
@@ -251,22 +327,30 @@ module fft_streaming_wrapper #(
             bank_release_sync1     <= 2'b00;
             bank_release_toggle_axis <= 2'b00;
             fft_gap_flag_axis      <= 1'b0;
-            egress_underflow_axis  <= 1'b0;
             egress_overflow_axis   <= 1'b0;
+            bank0_wr_en            <= 1'b0;
+            bank1_wr_en            <= 1'b0;
+            bank0_wr_addr          <= {PAIR_ADDR_WIDTH{1'b0}};
+            bank1_wr_addr          <= {PAIR_ADDR_WIDTH{1'b0}};
+            ant0_bank0_wr_data     <= {PAIR_WORD_WIDTH{1'b0}};
+            ant0_bank1_wr_data     <= {PAIR_WORD_WIDTH{1'b0}};
+            ant1_bank0_wr_data     <= {PAIR_WORD_WIDTH{1'b0}};
+            ant1_bank1_wr_data     <= {PAIR_WORD_WIDTH{1'b0}};
             fft_gap_toggle_sync0   <= 1'b0;
             fft_gap_toggle_sync1   <= 1'b0;
             fft_gap_toggle_axis    <= 1'b0;
             egress_overflow_toggle_sync0 <= 1'b0;
             egress_overflow_toggle_sync1 <= 1'b0;
             egress_overflow_toggle_axis  <= 1'b0;
+            latency_start_pulse          <= 2'b00;
             for (idx = 0; idx < 2; idx = idx + 1) begin
-                latency_counter[idx] <= 16'd0;
-                latency_symbol[idx]  <= 7'd0;
-                latency_valid[idx]   <= 1'b0;
-                bank_symbol[idx]     <= 7'd0;
+                latency_start_symbol[idx] <= 7'd0;
+                bank_symbol[idx]          <= 7'd0;
             end
         end else begin
             // Synchronize bank release toggles from FFT domain.
+            bank0_wr_en <= 1'b0;
+            bank1_wr_en <= 1'b0;
             bank_release_sync0 <= bank_release_toggle_fft;
             bank_release_sync1 <= bank_release_sync0;
 
@@ -292,12 +376,7 @@ module fft_streaming_wrapper #(
             end
 
 
-            // Update latency counters for outstanding symbols.
-            for (idx = 0; idx < 2; idx = idx + 1) begin
-                if (latency_valid[idx]) begin
-                    latency_counter[idx] <= latency_counter[idx] + 16'd1;
-                end
-            end
+            latency_start_pulse <= 2'b00;
 
             // Token FIFO push handling.
             token_fifo_wr_en <= 1'b0;
@@ -332,13 +411,15 @@ module fft_streaming_wrapper #(
                     pending_sample_valid <= 1'b0;
                     case (ingress_bank_sel)
                         1'b0: begin
-                            ant0_bank0[ingress_pair_addr] <= {
+                            bank0_wr_en        <= 1'b1;
+                            bank0_wr_addr      <= ingress_pair_addr;
+                            ant0_bank0_wr_data <= {
                                 ant0_imag_shift,
                                 ant0_real_shift,
                                 pending_ant0_imag,
                                 pending_ant0_real
                             };
-                            ant1_bank0[ingress_pair_addr] <= {
+                            ant1_bank0_wr_data <= {
                                 ant1_imag_shift,
                                 ant1_real_shift,
                                 pending_ant1_imag,
@@ -346,13 +427,15 @@ module fft_streaming_wrapper #(
                             };
                         end
                         1'b1: begin
-                            ant0_bank1[ingress_pair_addr] <= {
+                            bank1_wr_en        <= 1'b1;
+                            bank1_wr_addr      <= ingress_pair_addr;
+                            ant0_bank1_wr_data <= {
                                 ant0_imag_shift,
                                 ant0_real_shift,
                                 pending_ant0_imag,
                                 pending_ant0_real
                             };
-                            ant1_bank1[ingress_pair_addr] <= {
+                            ant1_bank1_wr_data <= {
                                 ant1_imag_shift,
                                 ant1_real_shift,
                                 pending_ant1_imag,
@@ -366,9 +449,8 @@ module fft_streaming_wrapper #(
                         bank_symbol[ingress_bank_sel] <= ingress_symbol_reg;
                         pending_token_data  <= {ingress_bank_sel, ingress_symbol_reg};
                         pending_token_valid <= 1'b1;
-                        latency_symbol[ingress_bank_sel]  <= ingress_symbol_reg;
-                        latency_counter[ingress_bank_sel] <= 16'd0;
-                        latency_valid[ingress_bank_sel]   <= 1'b1;
+                        latency_start_symbol[ingress_bank_sel] <= ingress_symbol_reg;
+                        latency_start_pulse[ingress_bank_sel]  <= 1'b1;
 
                         ingress_pair_addr <= {PAIR_ADDR_WIDTH{1'b0}};
                         if (bank_in_use[~ingress_bank_sel]) begin
@@ -403,13 +485,17 @@ module fft_streaming_wrapper #(
 
     reg [6:0] active_symbol_fft;
     reg       active_bank_fft;
-    reg [PAIR_ADDR_WIDTH-1:0] fft_pair_addr;
+    reg [PAIR_ADDR_WIDTH-1:0] fft_read_addr;
+    reg [PAIR_ADDR_WIDTH:0]   fft_pairs_requested;
     reg [PAIR_ADDR_WIDTH:0]   fft_pairs_loaded;
     reg [PAIR_ADDR_WIDTH:0]   fft_pairs_captured;
     reg                       fft_load_active;
     reg                       fft_capture_active;
     reg                       fft_wait_output;
     reg                       fft_capture_start_pending;
+    reg                       fft_read_issue;
+    reg                       fft_read_issue_d;
+    reg                       fft_read_bank_d;
     reg [GAP_COUNTER_WIDTH-1:0] cooldown_counter;
 
     reg                       fft_next_pulse;
@@ -451,7 +537,8 @@ module fft_streaming_wrapper #(
             bank_release_toggle_fft <= 2'b00;
             active_symbol_fft       <= 7'd0;
             active_bank_fft         <= 1'b0;
-            fft_pair_addr           <= {PAIR_ADDR_WIDTH{1'b0}};
+            fft_read_addr           <= {PAIR_ADDR_WIDTH{1'b0}};
+            fft_pairs_requested     <= {(PAIR_ADDR_WIDTH+1){1'b0}};
             fft_pairs_loaded        <= {(PAIR_ADDR_WIDTH+1){1'b0}};
             fft_pairs_captured      <= {(PAIR_ADDR_WIDTH+1){1'b0}};
             fft_load_active         <= 1'b0;
@@ -460,6 +547,9 @@ module fft_streaming_wrapper #(
             fft_capture_start_pending <= 1'b0;
             cooldown_counter        <= {GAP_COUNTER_WIDTH{1'b0}};
             fft_next_pulse          <= 1'b0;
+            fft_read_issue          <= 1'b0;
+            fft_read_issue_d        <= 1'b0;
+            fft_read_bank_d         <= 1'b0;
             ant0_fft_pair           <= {PAIR_WORD_WIDTH{1'b0}};
             ant1_fft_pair           <= {PAIR_WORD_WIDTH{1'b0}};
             metadata_fifo_wr_en     <= 1'b0;
@@ -482,6 +572,8 @@ module fft_streaming_wrapper #(
             data_fifo_wr_en     <= 1'b0;
             token_fifo_rd_en_reg <= 1'b0;
             token_fifo_rd_en_d  <= token_fifo_rd_en_reg;
+            fft_read_issue_d    <= fft_read_issue;
+            fft_read_issue      <= 1'b0;
 
             if (token_read_pending && token_fifo_rd_en_d) begin
                 token_payload_fft   <= token_fifo_rd_data;
@@ -492,14 +584,16 @@ module fft_streaming_wrapper #(
             if (token_payload_valid && !fft_load_active && !fft_capture_active && !fft_wait_output) begin
                 active_bank_fft      <= token_payload_fft[7];
                 active_symbol_fft    <= token_payload_fft[6:0];
-                fft_pair_addr        <= {PAIR_ADDR_WIDTH{1'b0}};
+                fft_read_addr        <= {PAIR_ADDR_WIDTH{1'b0}};
+                fft_pairs_requested  <= {(PAIR_ADDR_WIDTH+1){1'b0}};
                 fft_pairs_loaded     <= {(PAIR_ADDR_WIDTH+1){1'b0}};
                 fft_load_active      <= 1'b1;
-                fft_next_pulse       <= 1'b1;
                 cooldown_counter     <= GAP_CYCLES[GAP_COUNTER_WIDTH-1:0];
                 metadata_fifo_wr_en  <= 1'b1;
                 metadata_fifo_wr_data <= token_payload_fft[6:0];
                 token_payload_valid  <= 1'b0;
+                fft_read_issue       <= 1'b0;
+                fft_read_issue_d     <= 1'b0;
             end else if (!token_payload_valid && !token_read_pending && !fft_load_active && !fft_capture_active && !fft_wait_output) begin
                 if (!token_fifo_empty) begin
                     if (cooldown_counter == {GAP_COUNTER_WIDTH{1'b0}}) begin
@@ -516,23 +610,34 @@ module fft_streaming_wrapper #(
             end
 
             if (fft_load_active) begin
-                // Fetch from selected bank and drive FFT inputs.
-                case (active_bank_fft)
-                    1'b0: begin
-                        ant0_fft_pair <= ant0_bank0[fft_pair_addr];
-                        ant1_fft_pair <= ant1_bank0[fft_pair_addr];
-                    end
-                    1'b1: begin
-                        ant0_fft_pair <= ant0_bank1[fft_pair_addr];
-                        ant1_fft_pair <= ant1_bank1[fft_pair_addr];
-                    end
-                endcase
+                if (fft_pairs_requested <= PAIR_LAST_EXT) begin
+                    fft_read_issue      <= 1'b1;
+                    fft_read_bank_d     <= active_bank_fft;
+                    fft_pairs_requested <= fft_pairs_requested + 1'b1;
+                    fft_read_addr       <= fft_read_addr + 1'b1;
+                end
 
-                fft_pair_addr    <= fft_pair_addr + 1'b1;
-                fft_pairs_loaded <= fft_pairs_loaded + 1'b1;
-                if (fft_pairs_loaded == PAIR_LAST_EXT) begin
-                    fft_load_active <= 1'b0;
-                    fft_wait_output <= 1'b1;
+                if (fft_read_issue_d) begin
+                    if (fft_pairs_loaded == {(PAIR_ADDR_WIDTH+1){1'b0}}) begin
+                        fft_next_pulse <= 1'b1;
+                    end
+
+                    case (fft_read_bank_d)
+                        1'b0: begin
+                            ant0_fft_pair <= ant0_bank0_q;
+                            ant1_fft_pair <= ant1_bank0_q;
+                        end
+                        1'b1: begin
+                            ant0_fft_pair <= ant0_bank1_q;
+                            ant1_fft_pair <= ant1_bank1_q;
+                        end
+                    endcase
+
+                    if (fft_pairs_loaded == PAIR_LAST_EXT) begin
+                        fft_load_active <= 1'b0;
+                        fft_wait_output <= 1'b1;
+                    end
+                    fft_pairs_loaded <= fft_pairs_loaded + 1'b1;
                 end
             end
 
@@ -699,12 +804,15 @@ module fft_streaming_wrapper #(
             m_axis_tuser        <= 7'd0;
             m_axis_tlast        <= 1'b0;
             latency_debug       <= 16'd0;
+            latency_clear_pulse <= 2'b00;
+            egress_underflow_axis <= 1'b0;
         end else begin
             m_axis_tvalid       <= 1'b0;
             m_axis_tlast        <= 1'b0;
             data_fifo_rd_en     <= 1'b0;
             metadata_fifo_rd_en <= 1'b0;
             metadata_fifo_rd_en_d <= metadata_fifo_rd_en;
+            latency_clear_pulse <= 2'b00;
 
             if (bins_remaining == 0 && !metadata_fifo_empty && !symbol_pending_load) begin
                 metadata_fifo_rd_en <= 1'b1;
@@ -767,13 +875,42 @@ module fft_streaming_wrapper #(
                         for (idx = 0; idx < 2; idx = idx + 1) begin
                             if (latency_valid[idx] && latency_symbol[idx] == current_symbol_axis) begin
                                 latency_debug     <= latency_counter[idx];
-                                latency_valid[idx] <= 1'b0;
+                                latency_clear_pulse[idx] <= 1'b1;
                             end
                         end
                     end
                 end
             end else if (symbol_data_started && (bins_remaining != {BIN_COUNTER_WIDTH{1'b0}}) && data_fifo_empty && !pair_valid && !data_rd_pending) begin
                 egress_underflow_axis <= 1'b1;
+            end
+        end
+    end
+
+    // ---------------------------------------------------------------------
+    // Latency tracking (clk_axis domain)
+    // ---------------------------------------------------------------------
+
+    always @(posedge clk_axis) begin
+        if (!rst_axis_n) begin
+            for (idx = 0; idx < 2; idx = idx + 1) begin
+                latency_counter[idx] <= 16'd0;
+                latency_symbol[idx]  <= 7'd0;
+                latency_valid[idx]   <= 1'b0;
+            end
+        end else begin
+            for (idx = 0; idx < 2; idx = idx + 1) begin
+                if (latency_start_pulse[idx]) begin
+                    latency_counter[idx] <= 16'd0;
+                    latency_symbol[idx]  <= latency_start_symbol[idx];
+                    latency_valid[idx]   <= 1'b1;
+                end else begin
+                    if (latency_valid[idx]) begin
+                        latency_counter[idx] <= latency_counter[idx] + 16'd1;
+                    end
+                    if (latency_clear_pulse[idx]) begin
+                        latency_valid[idx] <= 1'b0;
+                    end
+                end
             end
         end
     end
