@@ -122,11 +122,10 @@ async def spiral_dft_pwm_reference(dut):
     reference = np.fft.fft(stimulus.astype(np.float64))
     reference_mag = np.abs(reference)
 
-    hardware_peak = float(np.max(magnitudes))
     reference_peak = float(np.max(reference_mag))
 
-    hardware_norm = magnitudes / hardware_peak if hardware_peak > 0 else magnitudes
     reference_norm = reference_mag / reference_peak if reference_peak > 0 else reference_mag
+    hardware_mag = magnitudes
 
     plots_dir = Path(__file__).parent / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -143,13 +142,29 @@ async def spiral_dft_pwm_reference(dut):
     ax_time.grid(True, linestyle=":", linewidth=0.5)
     ax_time.legend()
 
-    ax_freq.set_title("FFT Magnitude (Normalized)")
-    ax_freq.plot(freq_axis, reference_norm[: freq_axis.size], label="NumPy FFT")
-    ax_freq.plot(freq_axis, hardware_norm[: freq_axis.size], label="SPIRAL DFT", linestyle="--")
+    ax_freq.set_title("FFT Magnitude")
+    line_ref, = ax_freq.plot(
+        freq_axis,
+        reference_norm[: freq_axis.size],
+        label="NumPy FFT (Normalized)",
+    )
+    ax_freq.set_ylabel("Magnitude (Normalized)")
+
+    ax_freq_right = ax_freq.twinx()
+    # Plot hardware magnitudes on a dedicated axis so values remain unscaled.
+    line_hw, = ax_freq_right.plot(
+        freq_axis,
+        hardware_mag[: freq_axis.size],
+        label="SPIRAL DFT (Raw)",
+        linestyle="--",
+    )
+    ax_freq_right.set_ylabel("SPIRAL Magnitude (LSBs)")
     ax_freq.set_xlabel("FFT Bin")
-    ax_freq.set_ylabel("Magnitude")
     ax_freq.grid(True, linestyle=":", linewidth=0.5)
-    ax_freq.legend()
+
+    lines = [line_ref, line_hw]
+    labels = [line.get_label() for line in lines]
+    ax_freq.legend(lines, labels, loc="best")
 
     fig.tight_layout()
     fig.savefig(plot_path, dpi=150)
