@@ -1,6 +1,7 @@
 import math
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 import shutil
 
@@ -21,22 +22,69 @@ from tests.utils.ofdm import generate_quantized_qpsk_symbol
 
 VERILATOR = shutil.which("verilator")
 
-DATA_WIDTH = 12
+STIMULUS_DATA_WIDTH = 12
 NUM_COMPLEX_SAMPLES = 2048
 SAMPLES_PER_CYCLE = 2
 CYCLES_PER_TRANSFORM = NUM_COMPLEX_SAMPLES // SAMPLES_PER_CYCLE
 
 
+@dataclass(frozen=True)
+class VariantConfig:
+    name: str
+    rtl_filename: str
+    dut_data_width: int
+    input_shift: int = 0
+
+
+VARIANT_CONFIGS: tuple[VariantConfig, ...] = (
+    VariantConfig(
+        name="spiral_dft_iterative_2048pt",
+        rtl_filename="spiral_dft_iterative_2048pt.v",
+        dut_data_width=12,
+        input_shift=0,
+    ),
+    VariantConfig(
+        name="spiral_dft_it_2048_unscaled",
+        rtl_filename="spiral_dft_it_2048_unscaled.v",
+        dut_data_width=12,
+        input_shift=0,
+    ),
+    VariantConfig(
+        name="spiral_dft_it_2048_16bit_scaled",
+        rtl_filename="spiral_dft_it_2048_16bit_scaled.v",
+        dut_data_width=16,
+        input_shift=4,
+    ),
+)
+
+VARIANTS_BY_NAME = {cfg.name: cfg for cfg in VARIANT_CONFIGS}
+DEFAULT_VARIANT = VARIANT_CONFIGS[0].name
+
+
 def _plot_suffix() -> str:
-    variant = os.getenv("SPIRAL_DFT_VARIANT")
-    if not variant:
-        return "spiral_dft_iterative_2048pt"
+    variant = os.getenv("SPIRAL_DFT_VARIANT", DEFAULT_VARIANT)
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in variant)
 
 
+def _get_variant_config() -> VariantConfig:
+    variant = os.getenv("SPIRAL_DFT_VARIANT", DEFAULT_VARIANT)
+    return VARIANTS_BY_NAME.get(variant, VARIANTS_BY_NAME[DEFAULT_VARIANT])
+
+
+def _shift_input(value: int, config: VariantConfig) -> int:
+    shifted = int(value) << config.input_shift
+    min_val = -(1 << (config.dut_data_width - 1))
+    max_val = (1 << (config.dut_data_width - 1)) - 1
+    if shifted < min_val or shifted > max_val:
+        raise ValueError(
+            f"Shifted input {shifted} outside {config.dut_data_width}-bit range "
+            f"for variant {config.name}."
+        )
+    return shifted
+
+
 RTL_VARIANTS = [
-    ("spiral_dft_iterative_2048pt", "spiral_dft_iterative_2048pt.v"),
-    ("spiral_dft_it_2048_unscaled", "spiral_dft_it_2048_unscaled.v"),
+    (cfg.name, cfg.rtl_filename) for cfg in VARIANT_CONFIGS
 ]
 
 
@@ -64,7 +112,7 @@ def generate_pwm_waveform(
     """Return a bipolar PWM waveform sized to num_samples."""
     if not (0.0 < duty_cycle < 1.0):
         raise ValueError("duty_cycle must be between 0 and 1.")
-    signed_limit = (1 << (DATA_WIDTH - 1)) - 1
+    signed_limit = (1 << (STIMULUS_DATA_WIDTH - 1)) - 1
     if amplitude > signed_limit or amplitude <= 0:
         raise ValueError(f"amplitude must be in the range 1..{signed_limit}.")
     period = max(1, int(period))
@@ -79,6 +127,7 @@ def generate_pwm_waveform(
 @cocotb.test()
 async def spiral_dft_pwm_reference(dut):
     """Feed a PWM stimulus through the SPIRAL DFT and capture its response."""
+    config = _get_variant_config()
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
 
@@ -107,11 +156,11 @@ async def spiral_dft_pwm_reference(dut):
 
     for cycle in range(CYCLES_PER_TRANSFORM):
         base = cycle * SAMPLES_PER_CYCLE
-        sample_a = int(stimulus[base])
-        sample_b = int(stimulus[base + 1])
-        dut.X0.value = _to_unsigned(sample_a, DATA_WIDTH)
+        sample_a = _shift_input(stimulus[base], config)
+        sample_b = _shift_input(stimulus[base + 1], config)
+        dut.X0.value = _to_unsigned(sample_a, config.dut_data_width)
         dut.X1.value = 0
-        dut.X2.value = _to_unsigned(sample_b, DATA_WIDTH)
+        dut.X2.value = _to_unsigned(sample_b, config.dut_data_width)
         dut.X3.value = 0
         await RisingEdge(dut.clk)
 
@@ -125,10 +174,10 @@ async def spiral_dft_pwm_reference(dut):
     outputs: list[complex] = []
     for _ in range(CYCLES_PER_TRANSFORM):
         await RisingEdge(dut.clk)
-        real_0 = _from_unsigned(dut.Y0.value.integer, DATA_WIDTH)
-        imag_0 = _from_unsigned(dut.Y1.value.integer, DATA_WIDTH)
-        real_1 = _from_unsigned(dut.Y2.value.integer, DATA_WIDTH)
-        imag_1 = _from_unsigned(dut.Y3.value.integer, DATA_WIDTH)
+        real_0 = _from_unsigned(dut.Y0.value.integer, config.dut_data_width)
+        imag_0 = _from_unsigned(dut.Y1.value.integer, config.dut_data_width)
+        real_1 = _from_unsigned(dut.Y2.value.integer, config.dut_data_width)
+        imag_1 = _from_unsigned(dut.Y3.value.integer, config.dut_data_width)
         outputs.append(complex(real_0, imag_0))
         outputs.append(complex(real_1, imag_1))
 
@@ -136,7 +185,9 @@ async def spiral_dft_pwm_reference(dut):
     magnitudes = np.abs(np.asarray(outputs, dtype=np.complex128))
     assert np.any(magnitudes > 0), "FFT outputs were all zero."
 
-    reference = np.fft.fft(stimulus.astype(np.float64))
+    scale_factor = 1 << config.input_shift
+    reference_input = stimulus.astype(np.float64) * scale_factor
+    reference = np.fft.fft(reference_input)
     reference_mag = np.abs(reference)
 
     reference_peak = float(np.max(reference_mag))
@@ -193,6 +244,7 @@ async def spiral_dft_pwm_reference(dut):
 @cocotb.test()
 async def spiral_dft_ofdm_constellation(dut):
     """Drive an OFDM symbol through the SPIRAL DFT and capture time/constellation plots."""
+    config = _get_variant_config()
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
 
@@ -210,7 +262,7 @@ async def spiral_dft_ofdm_constellation(dut):
 
     symbol = generate_quantized_qpsk_symbol(
         n_fft=NUM_COMPLEX_SAMPLES,
-        data_width=DATA_WIDTH,
+        data_width=STIMULUS_DATA_WIDTH,
         num_subcarriers=256,
         seed=11,
         cp_len=0,
@@ -226,15 +278,15 @@ async def spiral_dft_ofdm_constellation(dut):
 
     for cycle in range(CYCLES_PER_TRANSFORM):
         base = cycle * SAMPLES_PER_CYCLE
-        sample_a_real = int(quant_real[base])
-        sample_a_imag = int(quant_imag[base])
-        sample_b_real = int(quant_real[base + 1])
-        sample_b_imag = int(quant_imag[base + 1])
+        sample_a_real = _shift_input(quant_real[base], config)
+        sample_a_imag = _shift_input(quant_imag[base], config)
+        sample_b_real = _shift_input(quant_real[base + 1], config)
+        sample_b_imag = _shift_input(quant_imag[base + 1], config)
 
-        dut.X0.value = _to_unsigned(sample_a_real, DATA_WIDTH)
-        dut.X1.value = _to_unsigned(sample_a_imag, DATA_WIDTH)
-        dut.X2.value = _to_unsigned(sample_b_real, DATA_WIDTH)
-        dut.X3.value = _to_unsigned(sample_b_imag, DATA_WIDTH)
+        dut.X0.value = _to_unsigned(sample_a_real, config.dut_data_width)
+        dut.X1.value = _to_unsigned(sample_a_imag, config.dut_data_width)
+        dut.X2.value = _to_unsigned(sample_b_real, config.dut_data_width)
+        dut.X3.value = _to_unsigned(sample_b_imag, config.dut_data_width)
         await RisingEdge(dut.clk)
 
     dut.X0.value = 0
@@ -247,10 +299,10 @@ async def spiral_dft_ofdm_constellation(dut):
     outputs: list[complex] = []
     for _ in range(CYCLES_PER_TRANSFORM):
         await RisingEdge(dut.clk)
-        real_0 = _from_unsigned(dut.Y0.value.integer, DATA_WIDTH)
-        imag_0 = _from_unsigned(dut.Y1.value.integer, DATA_WIDTH)
-        real_1 = _from_unsigned(dut.Y2.value.integer, DATA_WIDTH)
-        imag_1 = _from_unsigned(dut.Y3.value.integer, DATA_WIDTH)
+        real_0 = _from_unsigned(dut.Y0.value.integer, config.dut_data_width)
+        imag_0 = _from_unsigned(dut.Y1.value.integer, config.dut_data_width)
+        real_1 = _from_unsigned(dut.Y2.value.integer, config.dut_data_width)
+        imag_1 = _from_unsigned(dut.Y3.value.integer, config.dut_data_width)
         outputs.append(complex(real_0, imag_0))
         outputs.append(complex(real_1, imag_1))
 
@@ -279,7 +331,8 @@ async def spiral_dft_ofdm_constellation(dut):
 
     occupied_bins = symbol.occupied_bins
     reference_fft = symbol.reference_fft
-    ref_points = reference_fft[occupied_bins]
+    scale_factor = 1 << config.input_shift
+    ref_points = reference_fft[occupied_bins] * scale_factor
     rtl_points = rtl_bins[occupied_bins]
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
