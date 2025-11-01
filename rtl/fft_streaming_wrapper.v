@@ -30,15 +30,17 @@ module fft_streaming_wrapper #(
 );
 
     localparam integer SAMPLE_WIDTH        = 12;
-    localparam integer CORE_WIDTH          = 12;
+    localparam integer CORE_WIDTH          = SAMPLE_WIDTH;
+    localparam integer FFT_CORE_WIDTH      = 16;
+    localparam integer FFT_SCALE_SHIFT     = FFT_CORE_WIDTH - SAMPLE_WIDTH;
     localparam integer OUTPUT_GUARD_WIDTH  = 18;
     localparam integer COMPLEX_WIDTH       = 2 * CORE_WIDTH;
     localparam integer PAIR_COUNT          = NFFT / SAMPLES_PER_CYCLE;
     localparam integer PAIR_WORD_WIDTH     = 2 * COMPLEX_WIDTH;
     localparam integer OUTPUT_PAIR_WIDTH   = 8 * OUTPUT_GUARD_WIDTH;
     localparam integer TOKEN_WIDTH         = 8;
-    localparam integer INPUT_TEMP_WIDTH    = SAMPLE_WIDTH + 4;
-    localparam integer OUTPUT_TEMP_WIDTH   = OUTPUT_GUARD_WIDTH + CORE_WIDTH;
+    localparam integer INPUT_TEMP_WIDTH    = SAMPLE_WIDTH + FFT_SCALE_SHIFT;
+    localparam integer OUTPUT_TEMP_WIDTH   = OUTPUT_GUARD_WIDTH + FFT_CORE_WIDTH;
     localparam signed [CORE_WIDTH-1:0] CORE_MAX = {1'b0, {(CORE_WIDTH-1){1'b1}}};
     localparam signed [CORE_WIDTH-1:0] CORE_MIN = {1'b1, {(CORE_WIDTH-1){1'b0}}};
     localparam signed [OUTPUT_GUARD_WIDTH-1:0] OUTPUT_MAX = {1'b0, {(OUTPUT_GUARD_WIDTH-1){1'b1}}};
@@ -91,14 +93,29 @@ module fft_streaming_wrapper #(
         end
     endfunction
 
-    // Saturating shift helper for FFT outputs prior to buffering.
-    function [OUTPUT_GUARD_WIDTH-1:0] shift_output_sample;
+    // Expand stored 12b samples to the FFT core width with sign preservation.
+    function [FFT_CORE_WIDTH-1:0] expand_fft_input_sample;
         input signed [CORE_WIDTH-1:0] value_in;
+        reg   signed [FFT_CORE_WIDTH-1:0] temp;
+        begin
+            temp = {{(FFT_CORE_WIDTH-CORE_WIDTH){value_in[CORE_WIDTH-1]}}, value_in};
+            if (FFT_SCALE_SHIFT > 0) begin
+                temp = temp <<< FFT_SCALE_SHIFT;
+            end
+            expand_fft_input_sample = temp;
+        end
+    endfunction
+
+    // Saturating helper for FFT outputs prior to buffering. Crop high guard bits while retaining LSB precision.
+    function [OUTPUT_GUARD_WIDTH-1:0] shift_output_sample;
+        input signed [FFT_CORE_WIDTH-1:0] value_in;
+        reg   signed [CORE_WIDTH-1:0] cropped_value;
         reg   signed [OUTPUT_TEMP_WIDTH-1:0] temp;
         reg   signed [OUTPUT_TEMP_WIDTH-1:0] upper_bound;
         reg   signed [OUTPUT_TEMP_WIDTH-1:0] lower_bound;
         begin
-            temp = {{(OUTPUT_TEMP_WIDTH-CORE_WIDTH){value_in[CORE_WIDTH-1]}}, value_in};
+            cropped_value = value_in[CORE_WIDTH-1:0];
+            temp = {{(OUTPUT_TEMP_WIDTH-CORE_WIDTH){cropped_value[CORE_WIDTH-1]}}, cropped_value};
             if (OUTPUT_SHIFT > 0) begin
                 temp = temp >>> OUTPUT_SHIFT;
             end
@@ -505,14 +522,14 @@ module fft_streaming_wrapper #(
     reg [PAIR_WORD_WIDTH-1:0] ant0_fft_pair;
     reg [PAIR_WORD_WIDTH-1:0] ant1_fft_pair;
 
-    wire [CORE_WIDTH-1:0] fft0_Y0;
-    wire [CORE_WIDTH-1:0] fft0_Y1;
-    wire [CORE_WIDTH-1:0] fft0_Y2;
-    wire [CORE_WIDTH-1:0] fft0_Y3;
-    wire [CORE_WIDTH-1:0] fft1_Y0;
-    wire [CORE_WIDTH-1:0] fft1_Y1;
-    wire [CORE_WIDTH-1:0] fft1_Y2;
-    wire [CORE_WIDTH-1:0] fft1_Y3;
+    wire signed [FFT_CORE_WIDTH-1:0] fft0_Y0;
+    wire signed [FFT_CORE_WIDTH-1:0] fft0_Y1;
+    wire signed [FFT_CORE_WIDTH-1:0] fft0_Y2;
+    wire signed [FFT_CORE_WIDTH-1:0] fft0_Y3;
+    wire signed [FFT_CORE_WIDTH-1:0] fft1_Y0;
+    wire signed [FFT_CORE_WIDTH-1:0] fft1_Y1;
+    wire signed [FFT_CORE_WIDTH-1:0] fft1_Y2;
+    wire signed [FFT_CORE_WIDTH-1:0] fft1_Y3;
 
     reg                     metadata_fifo_wr_en;
     reg  [6:0]              metadata_fifo_wr_data;
@@ -682,15 +699,25 @@ module fft_streaming_wrapper #(
     end
 
     // FFT core input assignments
-    wire [CORE_WIDTH-1:0] fft0_X0 = ant0_fft_pair[CORE_WIDTH-1:0];
-    wire [CORE_WIDTH-1:0] fft0_X1 = ant0_fft_pair[2*CORE_WIDTH-1:CORE_WIDTH];
-    wire [CORE_WIDTH-1:0] fft0_X2 = ant0_fft_pair[3*CORE_WIDTH-1:2*CORE_WIDTH];
-    wire [CORE_WIDTH-1:0] fft0_X3 = ant0_fft_pair[4*CORE_WIDTH-1:3*CORE_WIDTH];
+    wire signed [CORE_WIDTH-1:0] fft0_X0_axis = ant0_fft_pair[CORE_WIDTH-1:0];
+    wire signed [CORE_WIDTH-1:0] fft0_X1_axis = ant0_fft_pair[2*CORE_WIDTH-1:CORE_WIDTH];
+    wire signed [CORE_WIDTH-1:0] fft0_X2_axis = ant0_fft_pair[3*CORE_WIDTH-1:2*CORE_WIDTH];
+    wire signed [CORE_WIDTH-1:0] fft0_X3_axis = ant0_fft_pair[4*CORE_WIDTH-1:3*CORE_WIDTH];
 
-    wire [CORE_WIDTH-1:0] fft1_X0 = ant1_fft_pair[CORE_WIDTH-1:0];
-    wire [CORE_WIDTH-1:0] fft1_X1 = ant1_fft_pair[2*CORE_WIDTH-1:CORE_WIDTH];
-    wire [CORE_WIDTH-1:0] fft1_X2 = ant1_fft_pair[3*CORE_WIDTH-1:2*CORE_WIDTH];
-    wire [CORE_WIDTH-1:0] fft1_X3 = ant1_fft_pair[4*CORE_WIDTH-1:3*CORE_WIDTH];
+    wire signed [CORE_WIDTH-1:0] fft1_X0_axis = ant1_fft_pair[CORE_WIDTH-1:0];
+    wire signed [CORE_WIDTH-1:0] fft1_X1_axis = ant1_fft_pair[2*CORE_WIDTH-1:CORE_WIDTH];
+    wire signed [CORE_WIDTH-1:0] fft1_X2_axis = ant1_fft_pair[3*CORE_WIDTH-1:2*CORE_WIDTH];
+    wire signed [CORE_WIDTH-1:0] fft1_X3_axis = ant1_fft_pair[4*CORE_WIDTH-1:3*CORE_WIDTH];
+
+    wire signed [FFT_CORE_WIDTH-1:0] fft0_X0 = expand_fft_input_sample(fft0_X0_axis);
+    wire signed [FFT_CORE_WIDTH-1:0] fft0_X1 = expand_fft_input_sample(fft0_X1_axis);
+    wire signed [FFT_CORE_WIDTH-1:0] fft0_X2 = expand_fft_input_sample(fft0_X2_axis);
+    wire signed [FFT_CORE_WIDTH-1:0] fft0_X3 = expand_fft_input_sample(fft0_X3_axis);
+
+    wire signed [FFT_CORE_WIDTH-1:0] fft1_X0 = expand_fft_input_sample(fft1_X0_axis);
+    wire signed [FFT_CORE_WIDTH-1:0] fft1_X1 = expand_fft_input_sample(fft1_X1_axis);
+    wire signed [FFT_CORE_WIDTH-1:0] fft1_X2 = expand_fft_input_sample(fft1_X2_axis);
+    wire signed [FFT_CORE_WIDTH-1:0] fft1_X3 = expand_fft_input_sample(fft1_X3_axis);
 
     // Instantiate SPIRAL FFT cores
     dft_top fft_ant0 (

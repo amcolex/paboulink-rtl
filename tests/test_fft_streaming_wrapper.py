@@ -385,7 +385,7 @@ def test_fft_streaming_wrapper(tmp_path: Path):
             str(rtl_dir / "fft_streaming_wrapper.v"),
             str(rtl_dir / "dual_clock_ram.v"),
             str(rtl_dir / "dual_clock_fifo.v"),
-            str(rtl_dir / "spiral_dft_iterative_2048pt.v"),
+            str(rtl_dir / "spiral_dft_it_2048_16bit_scaled.v"),
         ],
         toplevel="fft_streaming_wrapper",
         toplevel_lang="verilog",
