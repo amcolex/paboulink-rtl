@@ -27,6 +27,19 @@ SAMPLES_PER_CYCLE = 2
 CYCLES_PER_TRANSFORM = NUM_COMPLEX_SAMPLES // SAMPLES_PER_CYCLE
 
 
+def _plot_suffix() -> str:
+    variant = os.getenv("SPIRAL_DFT_VARIANT")
+    if not variant:
+        return "spiral_dft_iterative_2048pt"
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in variant)
+
+
+RTL_VARIANTS = [
+    ("spiral_dft_iterative_2048pt", "spiral_dft_iterative_2048pt.v"),
+    ("spiral_dft_it_2048_unscaled", "spiral_dft_it_2048_unscaled.v"),
+]
+
+
 def _to_unsigned(value: int, width: int) -> int:
     """Convert a signed integer into width-bit two's complement."""
     mask = (1 << width) - 1
@@ -133,7 +146,7 @@ async def spiral_dft_pwm_reference(dut):
 
     plots_dir = Path(__file__).parent / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
-    plot_path = plots_dir / "spiral_dft_pwm.png"
+    plot_path = plots_dir / f"spiral_dft_pwm_{_plot_suffix()}.png"
 
     time_axis = np.arange(NUM_COMPLEX_SAMPLES)
     freq_axis = np.arange(NUM_COMPLEX_SAMPLES // 2)
@@ -259,7 +272,7 @@ async def spiral_dft_ofdm_constellation(dut):
     axes[1].grid(True, linestyle=":", linewidth=0.5)
 
     fig.tight_layout()
-    time_plot_path = plots_dir / "spiral_dft_ofdm_timeseries.png"
+    time_plot_path = plots_dir / f"spiral_dft_ofdm_timeseries_{_plot_suffix()}.png"
     fig.savefig(time_plot_path, dpi=150)
     plt.close(fig)
     dut._log.info(f"Saved OFDM input time-series plot to {time_plot_path}")
@@ -292,17 +305,24 @@ async def spiral_dft_ofdm_constellation(dut):
 
     fig.suptitle("OFDM Constellation (No Additional Scaling)")
     fig.tight_layout()
-    constellation_path = plots_dir / "spiral_dft_ofdm_constellation.png"
+    constellation_path = plots_dir / f"spiral_dft_ofdm_constellation_{_plot_suffix()}.png"
     fig.savefig(constellation_path, dpi=150)
     plt.close(fig)
     dut._log.info(f"Saved OFDM constellation plot to {constellation_path}")
 
 
 @pytest.mark.skipif(VERILATOR is None, reason="Verilator executable not found; install Verilator to run this test.")
-def test_spiral_dft_pwm():
+@pytest.mark.parametrize(
+    ("variant_name", "rtl_filename"),
+    RTL_VARIANTS,
+    ids=[name for name, _ in RTL_VARIANTS],
+)
+def test_spiral_dft_pwm(variant_name: str, rtl_filename: str):
     rtl_dir = Path(__file__).resolve().parent.parent / "rtl"
-    rtl_file = rtl_dir / "spiral_dft_iterative_2048pt.v"
-    build_dir = Path("tests") / "sim_build" / "spiral_dft_pwm"
+    rtl_file = rtl_dir / rtl_filename
+    if not rtl_file.exists() or rtl_file.stat().st_size == 0:
+        pytest.fail(f"RTL variant {variant_name} not available at {rtl_file}.")
+    build_dir = Path("tests") / "sim_build" / f"spiral_dft_pwm_{variant_name}"
 
     run(
         verilog_sources=[str(rtl_file)],
@@ -314,5 +334,6 @@ def test_spiral_dft_pwm():
         verilog_compile_args=["--Wno-WIDTHEXPAND"],
         extra_env={
             "COCOTB_RESULTS_FILE": str(build_dir / "results.xml"),
+            "SPIRAL_DFT_VARIANT": variant_name,
         },
     )
