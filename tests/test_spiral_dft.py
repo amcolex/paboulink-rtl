@@ -19,6 +19,7 @@ from cocotb_test.simulator import run
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.utils.ofdm import generate_quantized_qpsk_symbol
+from tests.utils.plotting import module_plot_dir
 
 VERILATOR = shutil.which("verilator")
 
@@ -59,6 +60,7 @@ VARIANT_CONFIGS: tuple[VariantConfig, ...] = (
 
 VARIANTS_BY_NAME = {cfg.name: cfg for cfg in VARIANT_CONFIGS}
 DEFAULT_VARIANT = VARIANT_CONFIGS[0].name
+PLOTS_DIR = module_plot_dir(__file__)
 
 
 def _plot_suffix() -> str:
@@ -195,8 +197,7 @@ async def spiral_dft_pwm_reference(dut):
     reference_norm = reference_mag / reference_peak if reference_peak > 0 else reference_mag
     hardware_mag = magnitudes
 
-    plots_dir = Path(__file__).parent / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir = PLOTS_DIR
     plot_path = plots_dir / f"spiral_dft_pwm_{_plot_suffix()}.png"
 
     time_axis = np.arange(NUM_COMPLEX_SAMPLES)
@@ -307,8 +308,7 @@ async def spiral_dft_ofdm_constellation(dut):
         outputs.append(complex(real_1, imag_1))
 
     rtl_bins = np.asarray(outputs, dtype=np.complex128)
-    plots_dir = Path(__file__).parent / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir = PLOTS_DIR
 
     time_axis = np.arange(NUM_COMPLEX_SAMPLES)
 

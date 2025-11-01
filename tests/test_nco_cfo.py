@@ -15,6 +15,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from tests.utils.plotting import module_plot_dir
 
 VERILATOR = shutil.which("verilator")
 
@@ -28,6 +29,7 @@ SCALE = (1 << (WIDTH - 1)) - 1
 PHASE_MASK = (1 << ACC_WIDTH) - 1
 TUSER_WIDTH = 4
 TUSER_MASK = (1 << TUSER_WIDTH) - 1
+PLOT_DIR = module_plot_dir(__file__)
 
 
 def _quantize(value: float) -> int:
@@ -323,8 +325,7 @@ async def nco_cfo_compensation(dut):
     expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
     assert output_tuser == expected_tuser
 
-    plot_dir = Path(__file__).resolve().parent / "plots"
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    plot_dir = PLOT_DIR
     _maybe_plot(
         input_records,
         output_records,
@@ -416,8 +417,7 @@ async def nco_cfo_dynamic_update(dut):
     expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
     assert output_tuser == expected_tuser
 
-    plot_dir = Path(__file__).resolve().parent / "plots"
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    plot_dir = PLOT_DIR
     _maybe_plot(
         input_records,
         output_records,
@@ -505,8 +505,7 @@ async def nco_cfo_multi_cfo_sweep(dut):
     expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
     assert output_tuser == expected_tuser
 
-    plot_dir = Path(__file__).resolve().parent / "plots"
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    plot_dir = PLOT_DIR
     segment_boundaries = [segment_length * i for i in range(1, len(segment_cfos))]
     _plot_segmented(
         input_records,
@@ -595,8 +594,7 @@ async def nco_cfo_constant_input_cfo_sweep(dut):
     expected_tuser = [_tuser_value(idx) for idx in range(num_samples)]
     assert output_tuser == expected_tuser
 
-    plot_dir = Path(__file__).resolve().parent / "plots"
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    plot_dir = PLOT_DIR
     segment_boundaries = [segment_length * i for i in range(1, len(segment_cfos))]
     _plot_segmented(
         input_records,

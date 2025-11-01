@@ -25,8 +25,10 @@ from tests.utils.ofdm import (
     generate_preamble,
     generate_qpsk_symbol,
 )
+from tests.utils.plotting import module_plot_dir
 
 VERILATOR = shutil.which("verilator")
+PLOT_DIR = module_plot_dir(__file__)
 
 
 def _pack_sample(ch0_i: int, ch0_q: int, ch1_i: int, ch1_q: int, width: int) -> int:
@@ -117,8 +119,7 @@ async def frontend_end_to_end(dut):
     width = int(dut.INPUT_WIDTH.value)
     frame_gap = int(dut.FRAME_GAP_SAMPLES.value)
 
-    plot_dir = Path(__file__).resolve().parent / "plots"
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    plot_dir = PLOT_DIR
 
     dut.m_axis_tready.value = 1
 

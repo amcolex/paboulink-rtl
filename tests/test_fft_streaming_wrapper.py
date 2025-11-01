@@ -16,12 +16,15 @@ from cocotb_test.simulator import run
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.utils.ofdm import generate_quantized_qpsk_symbol
+from tests.utils.plotting import module_plot_dir
 
 VERILATOR = shutil.which("verilator")
 
 NFFT = 2048
 DATA_WIDTH = 12
 GAP_CYCLES = 11287
+SIGNED_LIMIT = (1 << (DATA_WIDTH - 1)) - 1
+PLOTS_DIR = module_plot_dir(__file__)
 
 
 def _to_unsigned(value: int, width: int) -> int:
@@ -35,19 +38,6 @@ def _from_unsigned(value: int, width: int) -> int:
     return value
 
 
-def generate_symbol(tone_specs: list[tuple[int, float]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return quantized I/Q arrays and complex view for the requested tones."""
-    n = np.arange(NFFT, dtype=np.float64)
-    waveform = np.zeros(NFFT, dtype=np.complex128)
-    for bin_idx, amplitude in tone_specs:
-        waveform += amplitude * np.exp(2j * np.pi * bin_idx * n / NFFT)
-
-    real = np.clip(np.round(np.real(waveform)), -2048, 2047).astype(np.int16)
-    imag = np.clip(np.round(np.imag(waveform)), -2048, 2047).astype(np.int16)
-    complex_view = real.astype(np.float64) + 1j * imag.astype(np.float64)
-    return real, imag, complex_view
-
-
 def pack_samples(ant0_real: int, ant0_imag: int, ant1_real: int, ant1_imag: int) -> int:
     """Pack two complex samples into the AXI4-Stream word format."""
     mask = (1 << DATA_WIDTH) - 1
@@ -59,8 +49,27 @@ def pack_samples(ant0_real: int, ant0_imag: int, ant1_real: int, ant1_imag: int)
     )
 
 
-@cocotb.test()
-async def fft_streaming_ofdm_constellation(dut):
+def generate_pwm_waveform(
+    num_samples: int,
+    *,
+    period: int = 64,
+    duty_cycle: float = 0.25,
+    amplitude: int = SIGNED_LIMIT,
+) -> np.ndarray:
+    num_samples = int(num_samples)
+    if num_samples <= 0:
+        return np.zeros(0, dtype=np.int16)
+    period = max(1, int(period))
+    high_samples = max(1, int(round(period * duty_cycle)))
+    amplitude = max(0, min(int(amplitude), SIGNED_LIMIT))
+    pattern = np.full(period, -amplitude, dtype=np.int16)
+    pattern[:high_samples] = amplitude
+    repeats = int(np.ceil(num_samples / period))
+    waveform = np.tile(pattern, repeats)[:num_samples]
+    return waveform.astype(np.int16, copy=False)
+
+
+async def initialize_fft_streaming_wrapper(dut) -> None:
     axis_clock = Clock(dut.clk_axis, 10, units="ns")
     fft_clock = Clock(dut.clk_fft, 4, units="ns")
     cocotb.start_soon(axis_clock.start())
@@ -85,19 +94,23 @@ async def fft_streaming_ofdm_constellation(dut):
     for _ in range(6):
         await RisingEdge(dut.clk_axis)
 
-    ofdm_symbol = generate_quantized_qpsk_symbol(
-        n_fft=NFFT,
-        data_width=DATA_WIDTH,
-        num_subcarriers=256,
-        seed=7,
-        cp_len=0,
-        include_cp=False,
-    )
 
-    for sample_idx in range(NFFT):
+async def stream_symbol(
+    dut,
+    ant0_real: np.ndarray,
+    *,
+    ant0_imag: np.ndarray | None = None,
+) -> None:
+    ant0_real = np.asarray(ant0_real, dtype=np.int64)
+    if ant0_imag is None:
+        ant0_imag = np.zeros_like(ant0_real)
+    else:
+        ant0_imag = np.asarray(ant0_imag, dtype=np.int64)
+
+    for sample_idx in range(ant0_real.size):
         packed = pack_samples(
-            int(ofdm_symbol.i_values[sample_idx]),
-            int(ofdm_symbol.q_values[sample_idx]),
+            int(ant0_real[sample_idx]),
+            int(ant0_imag[sample_idx]),
             0,
             0,
         )
@@ -115,10 +128,13 @@ async def fft_streaming_ofdm_constellation(dut):
 
     dut.s_axis_tdata.value = 0
     dut.s_axis_tuser.value = 0
+    dut.s_axis_tvalid.value = 0
     dut.s_axis_tlast.value = 0
 
+
+async def capture_fft_bins(dut, expected_bins: int = NFFT) -> np.ndarray:
     outputs: list[complex] = []
-    max_cycles = NFFT + GAP_CYCLES + 2048
+    max_cycles = expected_bins + GAP_CYCLES + 4096
 
     for _ in range(max_cycles):
         await RisingEdge(dut.clk_axis)
@@ -127,252 +143,125 @@ async def fft_streaming_ofdm_constellation(dut):
             ant0_real = _from_unsigned(data_word & ((1 << DATA_WIDTH) - 1), DATA_WIDTH)
             ant0_imag = _from_unsigned((data_word >> 12) & ((1 << DATA_WIDTH) - 1), DATA_WIDTH)
             outputs.append(complex(ant0_real, ant0_imag))
-            if len(outputs) >= NFFT:
+            if len(outputs) >= expected_bins:
                 break
 
-    rtl_bins = np.asarray(outputs, dtype=np.complex128)
-    plots_dir = Path(__file__).parent / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
+    if len(outputs) < expected_bins:
+        dut._log.warning(
+            "Captured %d FFT bins (expected %d)",
+            len(outputs),
+            expected_bins,
+        )
 
-    time_axis = np.arange(NFFT)
-    quant_real = ofdm_symbol.i_values.astype(np.int16)
-    quant_imag = ofdm_symbol.q_values.astype(np.int16)
+    return np.asarray(outputs, dtype=np.complex128)
 
-    fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-    axes[0].plot(time_axis, quant_real, linewidth=0.8)
-    axes[0].set_ylabel("I (LSBs)")
-    axes[0].set_title("Quantized OFDM Symbol - Time Domain (Input)")
+
+def plot_time_and_fft(
+    time_real: np.ndarray,
+    time_imag: np.ndarray | None,
+    fft_bins: np.ndarray,
+    *,
+    title_prefix: str,
+    filename: str,
+) -> Path:
+    plots_dir = PLOTS_DIR
+    time_real = np.asarray(time_real, dtype=np.int64)
+    time_axis = np.arange(time_real.size)
+
+    fig, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=False)
+
+    axes[0].plot(time_axis, time_real, label="I", linewidth=0.8)
+    if time_imag is not None:
+        time_imag = np.asarray(time_imag, dtype=np.int64)
+        axes[0].plot(time_axis, time_imag, label="Q", linewidth=0.8)
+    axes[0].set_title(f"{title_prefix} Time Samples (Raw)")
+    axes[0].set_ylabel("Amplitude (LSBs)")
+    axes[0].set_xlabel("Sample Index")
     axes[0].grid(True, linestyle=":", linewidth=0.5)
+    if time_imag is not None:
+        axes[0].legend(loc="best")
 
-    axes[1].plot(time_axis, quant_imag, linewidth=0.8, color="tab:orange")
-    axes[1].set_ylabel("Q (LSBs)")
-    axes[1].set_xlabel("Sample Index")
+    fft_bins = np.asarray(fft_bins, dtype=np.complex128)
+    if fft_bins.size:
+        freq_axis = np.arange(fft_bins.size)
+        axes[1].plot(freq_axis, fft_bins.real, label="Real", linewidth=0.8)
+        axes[1].plot(freq_axis, fft_bins.imag, label="Imag", linewidth=0.8)
+        axes[1].legend(loc="best")
+    else:
+        axes[1].text(
+            0.5,
+            0.5,
+            "No FFT data captured",
+            ha="center",
+            va="center",
+            transform=axes[1].transAxes,
+        )
+    axes[1].set_title(f"{title_prefix} FFT Output (Raw)")
+    axes[1].set_xlabel("FFT Bin")
+    axes[1].set_ylabel("Amplitude (LSBs)")
     axes[1].grid(True, linestyle=":", linewidth=0.5)
 
     fig.tight_layout()
-    time_plot_path = plots_dir / "fft_streaming_wrapper_ofdm_timeseries.png"
-    fig.savefig(time_plot_path, dpi=150)
+    plot_path = plots_dir / filename
+    fig.savefig(plot_path, dpi=150)
     plt.close(fig)
-    dut._log.info(f"Saved OFDM input time-series plot to {time_plot_path}")
-
-    if rtl_bins.size < NFFT:
-        dut._log.warning(
-            "Captured %d FFT bins, expected %d; skipping constellation plot",
-            rtl_bins.size,
-            NFFT,
-        )
-        return
-
-    occupied_bins = ofdm_symbol.occupied_bins
-    reference_fft = ofdm_symbol.reference_fft
-    ref_points = reference_fft[occupied_bins]
-    rtl_points = rtl_bins[occupied_bins]
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-    axes[0].scatter(ref_points.real, ref_points.imag, alpha=0.6, s=12, color="tab:blue")
-    axes[0].set_title("Reference (NumPy)")
-    axes[1].scatter(
-        rtl_points.real,
-        rtl_points.imag,
-        marker="x",
-        s=20,
-        linewidths=0.8,
-        color="tab:orange",
-    )
-    axes[1].set_title("FFT Output (RTL)")
-
-    for ax in axes:
-        ax.axhline(0, color="black", linewidth=0.5, linestyle=":")
-        ax.axvline(0, color="black", linewidth=0.5, linestyle=":")
-        ax.grid(True, linestyle=":", linewidth=0.5)
-        ax.set_aspect("equal", adjustable="box")
-
-    axes[0].set_xlabel("I")
-    axes[0].set_ylabel("Q")
-    axes[1].set_xlabel("I")
-    axes[1].set_ylabel("Q")
-    fig.suptitle("OFDM Constellation (No Additional Scaling)")
-
-    fig.tight_layout()
-    constellation_plot_path = plots_dir / "fft_streaming_wrapper_ofdm_constellation.png"
-    fig.savefig(constellation_plot_path, dpi=150)
-    plt.close(fig)
-    dut._log.info(f"Saved OFDM constellation plot to {constellation_plot_path}")
+    return plot_path
 
 
 @cocotb.test()
-async def fft_streaming_functional(dut):
-    axis_clock = Clock(dut.clk_axis, 10, units="ns")
-    fft_clock = Clock(dut.clk_fft, 4, units="ns")
-    cocotb.start_soon(axis_clock.start())
-    cocotb.start_soon(fft_clock.start())
+async def fft_streaming_ofdm_plot(dut):
+    await initialize_fft_streaming_wrapper(dut)
 
-    dut.rst_axis_n.value = 0
-    dut.rst_fft_n.value = 0
-    dut.s_axis_tdata.value = 0
-    dut.s_axis_tuser.value = 0
-    dut.s_axis_tvalid.value = 0
-    dut.s_axis_tlast.value = 0
-    dut.m_axis_tready.value = 1
+    ofdm_symbol = generate_quantized_qpsk_symbol(
+        n_fft=NFFT,
+        data_width=DATA_WIDTH,
+        num_subcarriers=256,
+        seed=7,
+        cp_len=0,
+        include_cp=False,
+    )
 
-    for _ in range(6):
-        await RisingEdge(dut.clk_fft)
-    dut.rst_fft_n.value = 1
+    await stream_symbol(
+        dut,
+        ofdm_symbol.i_values,
+        ant0_imag=ofdm_symbol.q_values,
+    )
 
-    for _ in range(6):
-        await RisingEdge(dut.clk_axis)
-    dut.rst_axis_n.value = 1
+    rtl_bins = await capture_fft_bins(dut)
 
-    for _ in range(6):
-        await RisingEdge(dut.clk_axis)
+    plot_path = plot_time_and_fft(
+        ofdm_symbol.i_values,
+        ofdm_symbol.q_values,
+        rtl_bins,
+        title_prefix="OFDM",
+        filename="fft_streaming_wrapper_ofdm.png",
+    )
+    dut._log.info("Saved OFDM plot to %s", plot_path)
 
-    symbol_tones = [
-        {
-            "ant0": [(32, 900.0)],
-            "ant1": [(8, 650.0), (96, 420.0)],
-        },
-        {
-            "ant0": [(128, 780.0), (256, 360.0)],
-            "ant1": [(20, 840.0)],
-        },
-    ]
 
-    stimulus_symbols: list[dict[str, np.ndarray]] = []
+@cocotb.test()
+async def fft_streaming_pwm_plot(dut):
+    await initialize_fft_streaming_wrapper(dut)
 
-    for symbol_idx, tone_spec in enumerate(symbol_tones):
-        ant0_real, ant0_imag, ant0_complex = generate_symbol(tone_spec["ant0"])
-        ant1_real, ant1_imag, ant1_complex = generate_symbol(tone_spec["ant1"])
+    pwm_waveform = generate_pwm_waveform(
+        NFFT,
+        period=64,
+        duty_cycle=0.25,
+        amplitude=1024,
+    )
 
-        stimulus_symbols.append(
-            {
-                "ant0": ant0_complex,
-                "ant1": ant1_complex,
-            }
-        )
+    await stream_symbol(dut, pwm_waveform)
 
-        for sample_idx in range(NFFT):
-            packed = pack_samples(
-                int(ant0_real[sample_idx]),
-                int(ant0_imag[sample_idx]),
-                int(ant1_real[sample_idx]),
-                int(ant1_imag[sample_idx]),
-            )
+    rtl_bins = await capture_fft_bins(dut)
 
-            dut.s_axis_tdata.value = packed
-            dut.s_axis_tuser.value = symbol_idx & 0x7F
-            dut.s_axis_tvalid.value = 1
-
-            while True:
-                await RisingEdge(dut.clk_axis)
-                if dut.s_axis_tready.value:
-                    break
-
-            dut.s_axis_tvalid.value = 0
-
-    dut.s_axis_tdata.value = 0
-    dut.s_axis_tuser.value = 0
-    dut.s_axis_tvalid.value = 0
-
-    outputs: dict[int, dict[str, list[complex]]] = {
-        idx: {"ant0": [], "ant1": []} for idx in range(len(symbol_tones))
-    }
-    observed_symbols: dict[int, int] = {}
-    tlast_counts = {idx: 0 for idx in range(len(symbol_tones))}
-
-    total_expected = len(symbol_tones) * NFFT
-    received = 0
-    max_cycles = len(symbol_tones) * (NFFT + GAP_CYCLES + 2000)
-
-    for _ in range(max_cycles):
-        await RisingEdge(dut.clk_axis)
-        if dut.m_axis_tvalid.value:
-            data_word = int(dut.m_axis_tdata.value)
-            symbol_id = int(dut.m_axis_tuser.value)
-            observed_symbols[symbol_id] = observed_symbols.get(symbol_id, 0) + 1
-            if symbol_id not in outputs:
-                raise AssertionError(f"Unexpected symbol index {symbol_id} on output")
-
-            ant0_real = _from_unsigned(data_word & ((1 << DATA_WIDTH) - 1), DATA_WIDTH)
-            ant0_imag = _from_unsigned((data_word >> 12) & ((1 << DATA_WIDTH) - 1), DATA_WIDTH)
-            ant1_real = _from_unsigned((data_word >> 24) & ((1 << DATA_WIDTH) - 1), DATA_WIDTH)
-            ant1_imag = _from_unsigned((data_word >> 36) & ((1 << DATA_WIDTH) - 1), DATA_WIDTH)
-
-            outputs[symbol_id]["ant0"].append(complex(ant0_real, ant0_imag))
-            outputs[symbol_id]["ant1"].append(complex(ant1_real, ant1_imag))
-            received += 1
-
-            if dut.m_axis_tlast.value:
-                tlast_counts[symbol_id] += 1
-
-        if received >= total_expected:
-            break
-
-    else:
-        raise AssertionError("Timed out waiting for FFT bins")
-
-    dut = cocotb.top
-    dut._log.info(f"Observed symbol counts: {observed_symbols}")
-
-    for symbol_id in range(len(symbol_tones)):
-        dut._log.info(
-            f"Captured {len(outputs[symbol_id]['ant0'])} bins for symbol {symbol_id} (ant0)"
-        )
-        dut._log.info(
-            f"Captured {len(outputs[symbol_id]['ant1'])} bins for symbol {symbol_id} (ant1)"
-        )
-        assert len(outputs[symbol_id]["ant0"]) == NFFT
-        assert len(outputs[symbol_id]["ant1"]) == NFFT
-        assert tlast_counts[symbol_id] == 1, "TLAST did not assert exactly once per symbol"
-
-    for _ in range(512):
-        await RisingEdge(dut.clk_axis)
-        if int(dut.status_flags.value) & 1 == 0:
-            break
-    else:
-        raise AssertionError("Busy flag remained set after processing completed")
-
-    status_value = int(dut.status_flags.value)
-    assert (status_value & 0b111110) == 0, f"Status flags reported an error: {status_value:06b}"
-
-    plots_dir = Path(__file__).parent / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
-
-    for symbol_id, stimulus in enumerate(stimulus_symbols):
-        fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-        freq_axis = np.arange(NFFT)
-
-        for row, antenna in enumerate(["ant0", "ant1"]):
-            rtl_bins = np.asarray(outputs[symbol_id][antenna], dtype=np.complex128)
-            ref_bins = np.fft.fft(stimulus[antenna])
-
-            rtl_mag = np.abs(rtl_bins)
-            ref_mag = np.abs(ref_bins)
-
-            rtl_norm = rtl_mag / np.max(rtl_mag) if np.max(rtl_mag) > 0 else rtl_mag
-            ref_norm = ref_mag / np.max(ref_mag) if np.max(ref_mag) > 0 else ref_mag
-
-            max_error = float(np.max(np.abs(rtl_norm - ref_norm)))
-            rtl_peak_bin = int(np.argmax(rtl_mag))
-            ref_peak_bin = int(np.argmax(ref_mag))
-            dut._log.info(
-                f"Symbol {symbol_id} {antenna}: max_error={max_error:.4f}, rtl_peak_bin={rtl_peak_bin}, ref_peak_bin={ref_peak_bin}"
-            )
-            assert max_error < 0.05, f"Normalized magnitude mismatch on symbol {symbol_id} {antenna}"
-            assert int(np.argmax(rtl_mag)) == int(np.argmax(ref_mag)), "FFT peak bin mismatch"
-
-            axes[row].plot(freq_axis, ref_norm, label="NumPy", linewidth=0.8)
-            axes[row].plot(freq_axis, rtl_norm, label="RTL", linestyle="--", linewidth=0.8)
-            axes[row].set_ylabel("Normalized |X[k]|")
-            axes[row].set_title(f"Symbol {symbol_id} - {antenna.upper()}")
-            axes[row].grid(True, linestyle=":", linewidth=0.5)
-            axes[row].legend()
-
-        axes[-1].set_xlabel("FFT Bin")
-        fig.tight_layout()
-        plot_path = plots_dir / f"fft_streaming_wrapper_symbol{symbol_id}.png"
-        fig.savefig(plot_path, dpi=150)
-        plt.close(fig)
-        dut._log.info(f"Saved FFT magnitude comparison to {plot_path}")
+    plot_path = plot_time_and_fft(
+        pwm_waveform,
+        None,
+        rtl_bins,
+        title_prefix="PWM",
+        filename="fft_streaming_wrapper_pwm.png",
+    )
+    dut._log.info("Saved PWM plot to %s", plot_path)
 
 
 @pytest.mark.skipif(VERILATOR is None, reason="Verilator is required to run this test")

@@ -21,6 +21,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from tests.utils.ofdm import OFDMParameters, generate_preamble, generate_qpsk_symbol
+from tests.utils.plotting import module_plot_dir
 
 VERILATOR = shutil.which("verilator")
 
@@ -36,6 +37,7 @@ OUTPUT_MARGIN = CP_LEN
 LEADING_GUARD_LEN = 256
 TRAILING_GUARD_LEN = NFFT + OUTPUT_MARGIN
 AWGN_SNR_DB = 10.0
+PLOT_DIR = module_plot_dir(__file__)
 
 
 def _pack_axis_samples(ch0_i: int, ch0_q: int, ch1_i: int, ch1_q: int) -> int:
@@ -317,8 +319,7 @@ async def minn_detector_flags_expected_sample(dut):
 
     observed_index = flagged_indices[0] if flagged_indices else None
 
-    plot_dir = Path(__file__).resolve().parent / "plots"
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    plot_dir = PLOT_DIR
     plot_path = plot_dir / "minn_preamble_detector.png"
 
     # Persist diagnostic plot with separate signal and metric subplots if available.
