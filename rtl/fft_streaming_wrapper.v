@@ -47,6 +47,8 @@ module fft_streaming_wrapper #(
     localparam signed [OUTPUT_GUARD_WIDTH-1:0] OUTPUT_MIN = {1'b1, {(OUTPUT_GUARD_WIDTH-1){1'b0}}};
     localparam signed [SAMPLE_WIDTH-1:0] SAMPLE_MAX = {1'b0, {(SAMPLE_WIDTH-1){1'b1}}};
     localparam signed [SAMPLE_WIDTH-1:0] SAMPLE_MIN = {1'b1, {(SAMPLE_WIDTH-1){1'b0}}};
+    localparam signed [FFT_CORE_WIDTH-1:0] FFT_CORE_MAX = {1'b0, {(FFT_CORE_WIDTH-1){1'b1}}};
+    localparam signed [FFT_CORE_WIDTH-1:0] FFT_CORE_MIN = {1'b1, {(FFT_CORE_WIDTH-1){1'b0}}};
 
     // ---------------------------------------------------------------------
     // Utility functions
@@ -97,10 +99,19 @@ module fft_streaming_wrapper #(
     function [FFT_CORE_WIDTH-1:0] expand_fft_input_sample;
         input signed [CORE_WIDTH-1:0] value_in;
         reg   signed [FFT_CORE_WIDTH-1:0] temp;
+        reg   signed [FFT_CORE_WIDTH+FFT_SCALE_SHIFT-1:0] shifted;
         begin
             temp = {{(FFT_CORE_WIDTH-CORE_WIDTH){value_in[CORE_WIDTH-1]}}, value_in};
             if (FFT_SCALE_SHIFT > 0) begin
-                temp = temp <<< FFT_SCALE_SHIFT;
+                shifted = temp;
+                shifted = shifted <<< FFT_SCALE_SHIFT;
+                if (shifted > FFT_CORE_MAX) begin
+                    temp = FFT_CORE_MAX;
+                end else if (shifted < FFT_CORE_MIN) begin
+                    temp = FFT_CORE_MIN;
+                end else begin
+                    temp = shifted[FFT_CORE_WIDTH-1:0];
+                end
             end
             expand_fft_input_sample = temp;
         end
