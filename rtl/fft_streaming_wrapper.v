@@ -639,6 +639,11 @@ module fft_streaming_wrapper #(
 
             if (fft_load_active) begin
                 if (fft_pairs_requested <= PAIR_LAST_EXT) begin
+                    if (fft_pairs_requested == {(PAIR_ADDR_WIDTH+1){1'b0}}) begin
+                        // Pulse next ahead of the first data pair so the FFT core observes the
+                        // start strobe one cycle before samples arrive (matches standalone usage).
+                        fft_next_pulse <= 1'b1;
+                    end
                     fft_read_issue      <= 1'b1;
                     fft_read_bank_d     <= active_bank_fft;
                     fft_pairs_requested <= fft_pairs_requested + 1'b1;
@@ -646,10 +651,6 @@ module fft_streaming_wrapper #(
                 end
 
                 if (fft_read_issue_d) begin
-                    if (fft_pairs_loaded == {(PAIR_ADDR_WIDTH+1){1'b0}}) begin
-                        fft_next_pulse <= 1'b1;
-                    end
-
                     case (fft_read_bank_d)
                         1'b0: begin
                             ant0_fft_pair <= ant0_bank0_q;
