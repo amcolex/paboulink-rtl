@@ -163,43 +163,109 @@ def plot_time_and_fft(
     *,
     title_prefix: str,
     filename: str,
+    constellation: tuple[np.ndarray, np.ndarray] | None = None,
+    reference_fft: np.ndarray | None = None,
 ) -> Path:
     plots_dir = PLOTS_DIR
     time_real = np.asarray(time_real, dtype=np.int64)
     time_axis = np.arange(time_real.size)
 
-    fig, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=False)
+    if constellation is None:
+        fig, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=False)
+        ax_time, ax_fft = axes
+        ax_ref = ax_rtl = None
+    else:
+        fig = plt.figure(figsize=(11, 9))
+        grid = fig.add_gridspec(3, 2, height_ratios=[1, 1, 1])
+        ax_time = fig.add_subplot(grid[0, :])
+        ax_fft = fig.add_subplot(grid[1, :])
+        ax_ref = fig.add_subplot(grid[2, 0])
+        ax_rtl = fig.add_subplot(grid[2, 1])
 
-    axes[0].plot(time_axis, time_real, label="I", linewidth=0.8)
+    ax_time.plot(time_axis, time_real, label="I", linewidth=0.8)
     if time_imag is not None:
         time_imag = np.asarray(time_imag, dtype=np.int64)
-        axes[0].plot(time_axis, time_imag, label="Q", linewidth=0.8)
-    axes[0].set_title(f"{title_prefix} Time Samples (Raw)")
-    axes[0].set_ylabel("Amplitude (LSBs)")
-    axes[0].set_xlabel("Sample Index")
-    axes[0].grid(True, linestyle=":", linewidth=0.5)
+        ax_time.plot(time_axis, time_imag, label="Q", linewidth=0.8)
+    ax_time.set_title(f"{title_prefix} Time Samples (Raw)")
+    ax_time.set_ylabel("Amplitude (LSBs)")
+    ax_time.set_xlabel("Sample Index")
+    ax_time.grid(True, linestyle=":", linewidth=0.5)
     if time_imag is not None:
-        axes[0].legend(loc="best")
+        ax_time.legend(loc="best")
 
     fft_bins = np.asarray(fft_bins, dtype=np.complex128)
     if fft_bins.size:
         freq_axis = np.arange(fft_bins.size)
-        axes[1].plot(freq_axis, fft_bins.real, label="Real", linewidth=0.8)
-        axes[1].plot(freq_axis, fft_bins.imag, label="Imag", linewidth=0.8)
-        axes[1].legend(loc="best")
+        ax_fft.plot(freq_axis, fft_bins.real, label="Real", linewidth=0.8)
+        ax_fft.plot(freq_axis, fft_bins.imag, label="Imag", linewidth=0.8)
+        ax_fft.legend(loc="best")
+        if reference_fft is not None:
+            reference_fft = np.asarray(reference_fft, dtype=np.complex128)
+            shared_len = min(reference_fft.size, freq_axis.size)
+            if shared_len == 0:
+                ax_fft.text(
+                    0.5,
+                    0.5,
+                    "Reference FFT empty",
+                    ha="center",
+                    va="center",
+                    transform=ax_fft.transAxes,
+                )
+            else:
+                ax_fft_ref = ax_fft.twinx()
+                ref_axis = freq_axis[:shared_len]
+                ref_mag = np.abs(reference_fft[:shared_len])
+                ax_fft_ref.plot(ref_axis, ref_mag, color="tab:green", label="Reference |X[k]|")
+                ax_fft_ref.set_ylabel("Reference Magnitude")
+                ax_fft_ref.tick_params(axis="y", colors="tab:green")
+                ax_fft_ref.yaxis.label.set_color("tab:green")
+                # Merge legends by gathering handles from both axes.
+                handles_left, labels_left = ax_fft.get_legend_handles_labels()
+                handles_right, labels_right = ax_fft_ref.get_legend_handles_labels()
+                ax_fft.legend(handles_left + handles_right, labels_left + labels_right, loc="best")
     else:
-        axes[1].text(
+        ax_fft.text(
             0.5,
             0.5,
             "No FFT data captured",
             ha="center",
             va="center",
-            transform=axes[1].transAxes,
+            transform=ax_fft.transAxes,
         )
-    axes[1].set_title(f"{title_prefix} FFT Output (Raw)")
-    axes[1].set_xlabel("FFT Bin")
-    axes[1].set_ylabel("Amplitude (LSBs)")
-    axes[1].grid(True, linestyle=":", linewidth=0.5)
+    ax_fft.set_title(f"{title_prefix} FFT Output (Raw)")
+    ax_fft.set_xlabel("FFT Bin")
+    ax_fft.set_ylabel("Amplitude (LSBs)")
+    ax_fft.grid(True, linestyle=":", linewidth=0.5)
+
+    if constellation is not None and ax_ref is not None and ax_rtl is not None:
+        ref_points, rtl_points = constellation
+        ref_points = np.asarray(ref_points, dtype=np.complex128)
+        rtl_points = np.asarray(rtl_points, dtype=np.complex128)
+
+        ax_ref.scatter(ref_points.real, ref_points.imag, s=14, alpha=0.6, label="Reference")
+        ax_ref.axhline(0, color="black", linewidth=0.5, linestyle=":")
+        ax_ref.axvline(0, color="black", linewidth=0.5, linestyle=":")
+        ax_ref.set_title(f"{title_prefix} Constellation Reference")
+        ax_ref.set_xlabel("I (LSBs)")
+        ax_ref.set_ylabel("Q (LSBs)")
+        ax_ref.grid(True, linestyle=":", linewidth=0.5)
+        ax_ref.set_aspect("equal", adjustable="datalim")
+
+        ax_rtl.scatter(
+            rtl_points.real,
+            rtl_points.imag,
+            s=18,
+            marker="x",
+            linewidths=0.8,
+            label="RTL",
+        )
+        ax_rtl.axhline(0, color="black", linewidth=0.5, linestyle=":")
+        ax_rtl.axvline(0, color="black", linewidth=0.5, linestyle=":")
+        ax_rtl.set_title(f"{title_prefix} Constellation RTL")
+        ax_rtl.set_xlabel("I (LSBs)")
+        ax_rtl.set_ylabel("Q (LSBs)")
+        ax_rtl.grid(True, linestyle=":", linewidth=0.5)
+        ax_rtl.set_aspect("equal", adjustable="datalim")
 
     fig.tight_layout()
     plot_path = plots_dir / filename
@@ -229,12 +295,28 @@ async def fft_streaming_ofdm_plot(dut):
 
     rtl_bins = await capture_fft_bins(dut)
 
+    constellation = None
+    if rtl_bins.size > 0:
+        occupied_bins = ofdm_symbol.occupied_bins
+        max_bin = int(np.max(occupied_bins)) if occupied_bins.size else -1
+        if rtl_bins.size > max_bin:
+            ref_points = ofdm_symbol.reference_fft[occupied_bins]
+            rtl_points = rtl_bins[occupied_bins]
+            constellation = (ref_points, rtl_points)
+        else:
+            dut._log.warning(
+                "Skipping constellation scatter: captured %d bins, need index up to %d",
+                rtl_bins.size,
+                max_bin,
+            )
+
     plot_path = plot_time_and_fft(
         ofdm_symbol.i_values,
         ofdm_symbol.q_values,
         rtl_bins,
         title_prefix="OFDM",
         filename="fft_streaming_wrapper_ofdm.png",
+        constellation=constellation,
     )
     dut._log.info("Saved OFDM plot to %s", plot_path)
 
@@ -253,6 +335,7 @@ async def fft_streaming_pwm_plot(dut):
     await stream_symbol(dut, pwm_waveform)
 
     rtl_bins = await capture_fft_bins(dut)
+    reference_fft = np.fft.fft(np.asarray(pwm_waveform, dtype=np.float64))
 
     plot_path = plot_time_and_fft(
         pwm_waveform,
@@ -260,6 +343,7 @@ async def fft_streaming_pwm_plot(dut):
         rtl_bins,
         title_prefix="PWM",
         filename="fft_streaming_wrapper_pwm.png",
+        reference_fft=reference_fft,
     )
     dut._log.info("Saved PWM plot to %s", plot_path)
 
